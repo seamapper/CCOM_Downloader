@@ -1,6 +1,33 @@
 """
-Main application for CCOM Bathymetry Downloader.
+CCOM Bathymetry Downloader
+==========================
+
+A PyQt6-based application for downloading bathymetry data from ArcGIS ImageServer
+REST endpoints and creating GeoTIFF files with interactive area selection.
+
+Features:
+    - Interactive map widget with area selection
+    - World Imagery basemap support
+    - Bathymetry hillshade underlay layer
+    - Multiple raster function support
+    - Adjustable opacity and blend modes
+    - Cell size selection (4m, 8m, 16m)
+    - Coordinate system conversion (EPSG:3857, EPSG:4326)
+    - Maximum download size validation
+    - Automatic filename generation with timestamp
+
+Author: Paul Johnson, Center for Coastal and Ocean Mapping, University of New Hampshire
+Date: December 12, 2025
+
+License: BSD 3-Clause License
+Copyright (c) 2025, Center for Coastal and Ocean Mapping, University of New Hampshire
+All rights reserved.
+
+See LICENSE file for full license text.
 """
+
+__version__ = "2025.1"
+
 import sys
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QLineEdit, QPushButton, 
@@ -12,6 +39,7 @@ from download_module import BathymetryDownloader
 import requests
 import json
 import pyproj
+from datetime import datetime
 
 
 class ServiceInfoLoader(QThread):
@@ -79,7 +107,7 @@ class MainWindow(QMainWindow):
         
     def init_ui(self):
         """Initialize the user interface."""
-        self.setWindowTitle("CCOM Bathymetry Downloader")
+        self.setWindowTitle(f"CCOM Bathymetry Downloader v{__version__} - pjohnson@ccom.unh.edu")
         self.setGeometry(100, 100, 1200, 800)
         
         # Central widget
@@ -120,11 +148,16 @@ class MainWindow(QMainWindow):
         self.hillshade_checkbox.stateChanged.connect(self.on_hillshade_toggled)
         basemap_controls.addWidget(self.hillshade_checkbox)
         
+        self.blend_checkbox = QCheckBox("Use Overlay Blend")
+        self.blend_checkbox.setChecked(True)  # On by default
+        self.blend_checkbox.stateChanged.connect(self.on_blend_toggled)
+        basemap_controls.addWidget(self.blend_checkbox)
+        
         basemap_controls.addWidget(QLabel("Opacity:"))
         self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
         self.opacity_slider.setMinimum(0)
         self.opacity_slider.setMaximum(100)
-        self.opacity_slider.setValue(60)  # 60% opacity by default
+        self.opacity_slider.setValue(100)  # 100% opacity by default
         self.opacity_slider.setMaximumWidth(100)
         self.opacity_slider.valueChanged.connect(self.on_opacity_changed)
         basemap_controls.addWidget(self.opacity_slider)
@@ -231,15 +264,6 @@ class MainWindow(QMainWindow):
         self.crs_combo = QComboBox()
         self.crs_combo.addItems(["EPSG:3857", "EPSG:4326"])
         output_layout.addWidget(self.crs_combo)
-        
-        output_layout.addWidget(QLabel("Output Path:"))
-        path_layout = QHBoxLayout()
-        self.output_path_edit = QLineEdit()
-        self.browse_btn = QPushButton("Browse...")
-        self.browse_btn.clicked.connect(self.browse_output_path)
-        path_layout.addWidget(self.output_path_edit)
-        path_layout.addWidget(self.browse_btn)
-        output_layout.addLayout(path_layout)
         
         output_group.setLayout(output_layout)
         right_layout.addWidget(output_group)
@@ -385,9 +409,10 @@ class MainWindow(QMainWindow):
                 raster_function = "DAR - StdDev - BlueGreen"
                 show_basemap = self.basemap_checkbox.isChecked() if hasattr(self, 'basemap_checkbox') else True
                 show_hillshade = self.hillshade_checkbox.isChecked() if hasattr(self, 'hillshade_checkbox') else True
-                initial_opacity = self.opacity_slider.value() / 100.0 if hasattr(self, 'opacity_slider') else 0.6
-                self.log_message(f"Creating MapWidget with extent: {self.service_extent}, raster function: {raster_function}, show_basemap: {show_basemap}, show_hillshade: {show_hillshade}")
-                self.map_widget = MapWidget(self.base_url, self.service_extent, raster_function=raster_function, show_basemap=show_basemap, show_hillshade=show_hillshade)
+                use_blend = self.blend_checkbox.isChecked() if hasattr(self, 'blend_checkbox') else True
+                initial_opacity = self.opacity_slider.value() / 100.0 if hasattr(self, 'opacity_slider') else 1.0
+                self.log_message(f"Creating MapWidget with extent: {self.service_extent}, raster function: {raster_function}, show_basemap: {show_basemap}, show_hillshade: {show_hillshade}, use_blend: {use_blend}")
+                self.map_widget = MapWidget(self.base_url, self.service_extent, raster_function=raster_function, show_basemap=show_basemap, show_hillshade=show_hillshade, use_blend=use_blend)
                 self.map_widget.bathymetry_opacity = initial_opacity
                 self.map_widget.selectionChanged.connect(self.on_selection_changed)
                 self.map_widget.selectionCompleted.connect(self.on_selection_completed)
@@ -452,6 +477,14 @@ class MainWindow(QMainWindow):
             else:
                 # Just update display
                 self.map_widget.update()
+                
+    def on_blend_toggled(self, state):
+        """Handle blend mode checkbox toggle."""
+        if self.map_widget:
+            use_blend = (state == Qt.CheckState.Checked.value or state == 2)
+            self.map_widget.use_blend = use_blend
+            # Just update display (no need to reload map)
+            self.map_widget.update()
                 
     def on_opacity_changed(self, value):
         """Handle opacity slider change."""
@@ -623,17 +656,6 @@ class MainWindow(QMainWindow):
             # Don't clear selection - keep it visible
             self.map_widget.load_map()
             
-    def browse_output_path(self):
-        """Browse for output file path."""
-        file_path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Save GeoTIFF",
-            "",
-            "GeoTIFF Files (*.tif *.tiff);;All Files (*)"
-        )
-        if file_path:
-            self.output_path_edit.setText(file_path)
-            
     def start_download(self):
         """Start downloading the selected area."""
         # Get bbox from stored selection or manual entry
@@ -669,11 +691,6 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "No Selection", "Please select an area on the map.")
             return
             
-        output_path = self.output_path_edit.text()
-        if not output_path:
-            QMessageBox.warning(self, "No Output Path", "Please specify an output file path.")
-            return
-            
         output_crs = self.crs_combo.currentText()
         cell_size = float(self.cell_size_combo.currentText())  # Get cell size in meters
         
@@ -698,6 +715,23 @@ class MainWindow(QMainWindow):
             )
             msg.setStandardButtons(QMessageBox.StandardButton.Ok)
             msg.exec()
+            return
+        
+        # Generate default filename: "CCOM_Bathy_" + cell_size + "_" + date_time + ".tif"
+        current_time = datetime.now()
+        date_time_str = current_time.strftime("%Y-%m-%d_%H-%M-%S")
+        default_filename = f"CCOM_Bathy_{int(cell_size)}m_{date_time_str}.tif"
+        
+        # Prompt for save location
+        output_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save GeoTIFF",
+            default_filename,
+            "GeoTIFF Files (*.tif *.tiff);;All Files (*)"
+        )
+        
+        # If user cancelled the dialog, abort download
+        if not output_path:
             return
         
         # Disable download button

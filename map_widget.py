@@ -160,7 +160,7 @@ class MapWidget(QWidget):
     selectionChanged = pyqtSignal(float, float, float, float)  # xmin, ymin, xmax, ymax
     selectionCompleted = pyqtSignal(float, float, float, float)  # xmin, ymin, xmax, ymax - emitted when selection is finished
     
-    def __init__(self, base_url, initial_extent, parent=None, raster_function="Shaded Relief - Haxby - MD Hillshade 2", show_basemap=True, show_hillshade=True):
+    def __init__(self, base_url, initial_extent, parent=None, raster_function="Shaded Relief - Haxby - MD Hillshade 2", show_basemap=True, show_hillshade=True, use_blend=False):
         super().__init__(parent)
         self.base_url = base_url
         self.extent = initial_extent  # (xmin, ymin, xmax, ymax)
@@ -169,7 +169,8 @@ class MapWidget(QWidget):
         self.hillshade_pixmap = QPixmap()
         self.show_basemap = show_basemap
         self.show_hillshade = show_hillshade
-        self.bathymetry_opacity = 0.6  # Opacity for bathymetry layer (0.0 to 1.0) - default 60%
+        self.use_blend = use_blend  # Use Multiply blend mode for top layer
+        self.bathymetry_opacity = 1.0  # Opacity for bathymetry layer (0.0 to 1.0) - default 100%
         self.selection_start = None
         self.selection_end = None
         self.is_selecting = False
@@ -179,7 +180,7 @@ class MapWidget(QWidget):
         self.map_loaded = False
         self._loading = False  # Flag to prevent multiple simultaneous loads
         self.selected_bbox_world = None  # Store selected bbox in world coordinates for persistent display
-        print(f"MapWidget initialized with raster function: {self.raster_function}, show_basemap: {self.show_basemap}, show_hillshade: {self.show_hillshade}")
+        print(f"MapWidget initialized with raster function: {self.raster_function}, show_basemap: {self.show_basemap}, show_hillshade: {self.show_hillshade}, use_blend: {self.use_blend}")
         
         self.setMinimumSize(800, 600)
         self.setMouseTracking(True)
@@ -598,8 +599,8 @@ class MapWidget(QWidget):
             painter.setOpacity(1.0)
             painter.drawPixmap(target_rect, self.hillshade_pixmap)
         
-        # Draw bathymetry layer on top (with opacity) - top layer
-        # Only this layer uses the opacity setting
+        # Draw bathymetry layer on top (with opacity and/or blend mode) - top layer
+        # Only this layer uses the opacity setting and blend mode
         if not self.current_pixmap.isNull():
             pixmap_rect = self.current_pixmap.rect()
             
@@ -608,10 +609,18 @@ class MapWidget(QWidget):
             y = (widget_rect.height() - pixmap_rect.height()) // 2
             target_rect = QRect(x, y, pixmap_rect.width(), pixmap_rect.height())
             
+            # Set blend mode if enabled (Multiply mode for natural blending with hillshade)
+            # Multiply darkens the colors while preserving hillshade detail, better than Overlay for cartography
+            if self.use_blend:
+                painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Multiply)
+            
             # Draw with opacity (only the top layer uses opacity)
             painter.setOpacity(self.bathymetry_opacity)
             painter.drawPixmap(target_rect, self.current_pixmap)
-            painter.setOpacity(1.0)  # Reset opacity for subsequent drawing
+            
+            # Reset opacity and composition mode for subsequent drawing
+            painter.setOpacity(1.0)
+            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
         elif not self.show_basemap:
             # Draw placeholder only if basemap is not shown
             painter.fillRect(self.rect(), QColor(200, 200, 200))
