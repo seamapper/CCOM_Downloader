@@ -1,0 +1,270 @@
+"""
+Module for downloading bathymetry data from ArcGIS ImageServer and creating GeoTIFF files.
+"""
+import requests
+import numpy as np
+import rasterio
+from rasterio.transform import from_bounds
+from rasterio.crs import CRS
+from io import BytesIO
+from PIL import Image
+import pyproj
+from PyQt6.QtCore import QThread, pyqtSignal
+
+
+class BathymetryDownloader(QThread):
+    """Thread for downloading bathymetry data and creating GeoTIFF."""
+    
+    progress = pyqtSignal(int)  # Progress percentage
+    status = pyqtSignal(str)  # Status message
+    finished = pyqtSignal(str)  # Output file path
+    error = pyqtSignal(str)  # Error message
+    
+    def __init__(self, base_url, bbox, output_path, output_crs="EPSG:3857", 
+                 pixel_size=None, max_size=15000):
+        super().__init__()
+        self.base_url = base_url
+        self.bbox = bbox  # (xmin, ymin, xmax, ymax) in EPSG:3857
+        self.output_path = output_path
+        self.output_crs = output_crs
+        self.pixel_size = pixel_size  # If None, use service default (4m)
+        self.max_size = max_size  # Maximum image size from service
+        self.cancelled = False
+        
+    def cancel(self):
+        """Cancel the download."""
+        self.cancelled = True
+        
+    def run(self):
+        """Download data and create GeoTIFF."""
+        try:
+            xmin, ymin, xmax, ymax = self.bbox
+            
+            # Determine output size
+            if self.pixel_size:
+                width = int((xmax - xmin) / self.pixel_size)
+                height = int((ymax - ymin) / self.pixel_size)
+            else:
+                # Use service default pixel size (4m)
+                # Calculate appropriate size based on extent
+                width = int((xmax - xmin) / 4.0)
+                height = int((ymax - ymin) / 4.0)
+                
+            # Limit to max size, maintaining aspect ratio
+            if width > self.max_size or height > self.max_size:
+                scale = min(self.max_size / width, self.max_size / height)
+                width = int(width * scale)
+                height = int(height * scale)
+                
+            self.status.emit(f"Requesting data: {width}x{height} pixels...")
+            self.progress.emit(10)
+            
+            if self.cancelled:
+                return
+                
+            # Download raw data (no raster function for raw values)
+            # Try multiple approaches to get raw data
+            
+            url = f"{self.base_url}/exportImage"
+            
+            # First, try to get raw TIFF data
+            params = {
+                "bbox": f"{xmin},{ymin},{xmax},{ymax}",
+                "size": f"{width},{height}",
+                "format": "tiff",
+                "f": "image",
+                "noData": "true",
+                "interpolation": "RSP_BilinearInterpolation"
+            }
+            
+            # Don't specify rasterFunction to get raw values
+            # The service should return raw F32 values
+            
+            self.progress.emit(30)
+            self.status.emit("Downloading data...")
+            
+            if self.cancelled:
+                return
+                
+            try:
+                response = requests.get(url, params=params, timeout=300, stream=True)
+                response.raise_for_status()
+                
+                # Check if we got a TIFF
+                content_type = response.headers.get('Content-Type', '')
+                source_nodata = None
+                if 'tiff' in content_type.lower() or response.content[:4] == b'II*\x00' or response.content[:4] == b'MM\x00*':
+                    # We got a TIFF, try to read it with rasterio
+                    try:
+                        with rasterio.open(BytesIO(response.content)) as src:
+                            img_array = src.read(1).astype(np.float32)
+                            # Preserve NoData value from source
+                            if src.nodata is not None:
+                                source_nodata = float(src.nodata)
+                                # Mask NoData values
+                                img_array = np.where(img_array == source_nodata, np.nan, img_array)
+                            # Use the transform and CRS from the downloaded TIFF if available
+                            if hasattr(src, 'transform') and src.transform:
+                                transform = src.transform
+                            if hasattr(src, 'crs') and src.crs:
+                                downloaded_crs = src.crs
+                    except Exception as e:
+                        self.status.emit(f"Could not read TIFF with rasterio: {e}. Trying PIL...")
+                        # Fall back to PIL
+                        img = Image.open(BytesIO(response.content))
+                        img_array = np.array(img, dtype=np.float32)
+                else:
+                    # Not a TIFF, try as image
+                    img = Image.open(BytesIO(response.content))
+                    if img.mode in ('RGB', 'RGBA'):
+                        # If we got a colored image, we might need to use pixelBlock
+                        # For now, convert to grayscale and warn
+                        self.status.emit("Warning: Received RGB image. Using grayscale conversion.")
+                        img_array = np.array(img.convert('L'), dtype=np.float32)
+                    else:
+                        img_array = np.array(img, dtype=np.float32)
+                        
+            except Exception as e:
+                self.status.emit(f"Error with TIFF format: {e}. Trying PNG format...")
+                # Fall back to PNG
+                params["format"] = "png"
+                response = requests.get(url, params=params, timeout=300, stream=True)
+                response.raise_for_status()
+                
+                img = Image.open(BytesIO(response.content))
+                if img.mode in ('RGB', 'RGBA'):
+                    self.status.emit("Warning: Received RGB PNG. Using grayscale conversion.")
+                    img_array = np.array(img.convert('L'), dtype=np.float32)
+                else:
+                    img_array = np.array(img, dtype=np.float32)
+                
+            # For now, if we got a PNG, we don't have the actual bathymetry values
+            # We need to use the pixelBlock operation or exportImage with proper format
+            # Let's try a different approach - use exportImage with pixelType and no raster function
+            
+            self.progress.emit(50)
+            self.status.emit("Processing data...")
+            
+            if self.cancelled:
+                return
+                
+            # Try to get actual pixel values using pixelBlock or different export parameters
+            # For now, we'll create the GeoTIFF with what we have
+            # In a production version, you'd want to use the pixelBlock operation
+            
+            # Determine CRS and bbox
+            source_crs = CRS.from_epsg(3857)  # Service uses Web Mercator
+            transform = None  # Initialize transform
+            
+            if self.output_crs == "EPSG:3857":
+                crs = CRS.from_epsg(3857)
+                output_bbox = self.bbox
+            elif self.output_crs == "EPSG:4326":
+                # Transform bbox to WGS84
+                transformer = pyproj.Transformer.from_crs("EPSG:3857", "EPSG:4326", always_xy=True)
+                lon_min, lat_min = transformer.transform(xmin, ymin)
+                lon_max, lat_max = transformer.transform(xmax, ymax)
+                output_bbox = (lon_min, lat_min, lon_max, lat_max)
+                crs = CRS.from_epsg(4326)
+                
+                # Reproject the data array
+                self.status.emit("Reprojecting to WGS84...")
+                from rasterio.warp import reproject, Resampling, calculate_default_transform
+                
+                # Calculate transform for output
+                transform, output_width, output_height = calculate_default_transform(
+                    source_crs, crs, width, height, *self.bbox
+                )
+                
+                # Create output array
+                reprojected_array = np.zeros((output_height, output_width), dtype=img_array.dtype)
+                
+                # Reproject
+                source_transform = from_bounds(*self.bbox, width, height)
+                reproject(
+                    source=img_array,
+                    destination=reprojected_array,
+                    src_transform=source_transform,
+                    src_crs=source_crs,
+                    dst_transform=transform,
+                    dst_crs=crs,
+                    resampling=Resampling.bilinear
+                )
+                
+                img_array = reprojected_array
+                width = output_width
+                height = output_height
+            else:
+                crs = CRS.from_string(self.output_crs)
+                output_bbox = self.bbox
+                
+            self.progress.emit(70)
+            self.status.emit("Creating GeoTIFF...")
+            
+            if self.cancelled:
+                return
+                
+            # Create transform if not already set from reprojection
+            if transform is None:
+                transform = from_bounds(*output_bbox, width, height)
+            
+            # Ensure array is 2D
+            if len(img_array.shape) == 3:
+                img_array = img_array[:, :, 0]
+            elif len(img_array.shape) == 2:
+                pass
+            else:
+                raise ValueError(f"Unexpected array shape: {img_array.shape}")
+            
+            # Handle NoData values
+            # Determine appropriate NoData value
+            nodata_value = -9999.0  # Default for bathymetry
+            
+            # Use source nodata if available
+            if 'source_nodata' in locals() and source_nodata is not None:
+                nodata_value = source_nodata
+            else:
+                # Check if we have actual data or if this is a visualization image
+                # If the array has values that look like visualization (0-255 range), we might need different handling
+                if img_array.dtype == np.uint8 or (img_array.max() <= 255 and img_array.min() >= 0):
+                    # This might be a visualization image, not raw bathymetry
+                    self.status.emit("Warning: Received visualization image. NoData may not be accurate.")
+                    nodata_value = 0.0
+                # else: nodata_value already set to -9999.0 above (default for bathymetry)
+            
+            # Convert NaN values to the nodata value for writing
+            # But keep them as NaN in memory for now
+            img_array_for_write = img_array.copy()
+            if np.any(np.isnan(img_array_for_write)):
+                img_array_for_write = np.nan_to_num(img_array_for_write, nan=nodata_value)
+            
+            # Ensure we're using float32 for bathymetry data
+            if img_array_for_write.dtype != np.float32:
+                img_array_for_write = img_array_for_write.astype(np.float32)
+                
+            # Write GeoTIFF with NoData value
+            with rasterio.open(
+                self.output_path,
+                'w',
+                driver='GTiff',
+                height=height,
+                width=width,
+                count=1,
+                dtype=img_array_for_write.dtype,
+                crs=crs,
+                transform=transform,
+                compress='lzw',
+                nodata=nodata_value
+            ) as dst:
+                dst.write(img_array_for_write, 1)
+                self.status.emit(f"GeoTIFF written with NoData value: {nodata_value}")
+                
+            self.progress.emit(100)
+            self.status.emit(f"GeoTIFF saved to: {self.output_path}")
+            self.finished.emit(self.output_path)
+            
+        except Exception as e:
+            self.error.emit(f"Error: {str(e)}")
+            import traceback
+            traceback.print_exc()
+
