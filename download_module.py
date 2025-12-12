@@ -92,13 +92,36 @@ class BathymetryDownloader(QThread):
             if self.cancelled:
                 return
                 
+            img_array = None
+            source_nodata = None
+            transform = None
+            downloaded_crs = None
+            
             try:
                 response = requests.get(url, params=params, timeout=300, stream=True)
+                
+                # Check for HTTP errors before processing
+                if response.status_code == 500:
+                    # Server error - provide helpful message
+                    error_msg = (
+                        f"Server error (500) from REST endpoint.\n\n"
+                        f"The server is unable to process this request. This may be due to:\n"
+                        f"  - Requested area is too large\n"
+                        f"  - Server is temporarily unavailable\n"
+                        f"  - Request parameters are invalid\n\n"
+                        f"Try:\n"
+                        f"  - Selecting a smaller area\n"
+                        f"  - Using a larger cell size (8m or 16m)\n"
+                        f"  - Waiting a few moments and trying again\n\n"
+                        f"Requested size: {width}x{height} pixels"
+                    )
+                    self.error.emit(error_msg)
+                    return
+                
                 response.raise_for_status()
                 
                 # Check if we got a TIFF
                 content_type = response.headers.get('Content-Type', '')
-                source_nodata = None
                 if 'tiff' in content_type.lower() or response.content[:4] == b'II*\x00' or response.content[:4] == b'MM\x00*':
                     # We got a TIFF, try to read it with rasterio
                     try:
@@ -130,19 +153,51 @@ class BathymetryDownloader(QThread):
                     else:
                         img_array = np.array(img, dtype=np.float32)
                         
+            except requests.exceptions.HTTPError as e:
+                # HTTP error (4xx, 5xx)
+                if hasattr(e.response, 'status_code'):
+                    if e.response.status_code == 500:
+                        error_msg = (
+                            f"Server error (500) from REST endpoint.\n\n"
+                            f"The server is unable to process this request. This may be due to:\n"
+                            f"  - Requested area is too large\n"
+                            f"  - Server is temporarily unavailable\n"
+                            f"  - Request parameters are invalid\n\n"
+                            f"Try:\n"
+                            f"  - Selecting a smaller area\n"
+                            f"  - Using a larger cell size (8m or 16m)\n"
+                            f"  - Waiting a few moments and trying again\n\n"
+                            f"Requested size: {width}x{height} pixels"
+                        )
+                    else:
+                        error_msg = f"HTTP error {e.response.status_code} from REST endpoint: {str(e)}"
+                else:
+                    error_msg = f"HTTP error from REST endpoint: {str(e)}"
+                self.error.emit(error_msg)
+                return
+            except requests.exceptions.RequestException as e:
+                # Connection or network error
+                error_msg = f"Network error connecting to REST endpoint: {str(e)}"
+                self.error.emit(error_msg)
+                return
             except Exception as e:
                 self.status.emit(f"Error with TIFF format: {e}. Trying PNG format...")
                 # Fall back to PNG
-                params["format"] = "png"
-                response = requests.get(url, params=params, timeout=300, stream=True)
-                response.raise_for_status()
-                
-                img = Image.open(BytesIO(response.content))
-                if img.mode in ('RGB', 'RGBA'):
-                    self.status.emit("Warning: Received RGB PNG. Using grayscale conversion.")
-                    img_array = np.array(img.convert('L'), dtype=np.float32)
-                else:
-                    img_array = np.array(img, dtype=np.float32)
+                try:
+                    params["format"] = "png"
+                    response = requests.get(url, params=params, timeout=300, stream=True)
+                    response.raise_for_status()
+                    
+                    img = Image.open(BytesIO(response.content))
+                    if img.mode in ('RGB', 'RGBA'):
+                        self.status.emit("Warning: Received RGB PNG. Using grayscale conversion.")
+                        img_array = np.array(img.convert('L'), dtype=np.float32)
+                    else:
+                        img_array = np.array(img, dtype=np.float32)
+                except Exception as e2:
+                    error_msg = f"Failed to download data: {str(e2)}"
+                    self.error.emit(error_msg)
+                    return
                 
             # For now, if we got a PNG, we don't have the actual bathymetry values
             # We need to use the pixelBlock operation or exportImage with proper format
@@ -157,6 +212,12 @@ class BathymetryDownloader(QThread):
             # Try to get actual pixel values using pixelBlock or different export parameters
             # For now, we'll create the GeoTIFF with what we have
             # In a production version, you'd want to use the pixelBlock operation
+            
+            # Ensure img_array is defined and not None
+            if img_array is None:
+                error_msg = "Failed to load image data from server response"
+                self.error.emit(error_msg)
+                return
             
             # Determine CRS and bbox
             source_crs = CRS.from_epsg(3857)  # Service uses Web Mercator

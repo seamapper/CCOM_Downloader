@@ -29,6 +29,7 @@ See LICENSE file for full license text.
 __version__ = "2025.1"
 
 import sys
+import os
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QLineEdit, QPushButton, 
                              QFileDialog, QComboBox, QProgressBar, QTextEdit,
@@ -86,7 +87,7 @@ class ServiceInfoLoader(QThread):
         except requests.exceptions.Timeout:
             self.error.emit("Connection timeout. Using default extent.")
         except requests.exceptions.RequestException as e:
-            self.error.emit(f"Network error: {str(e)}. Using default extent.")
+            self.error.emit(f"Network error connecting to REST endpoint: {str(e)}. Using default extent.")
         except Exception as e:
             self.error.emit(f"Error loading service info: {str(e)}. Using default extent.")
 
@@ -96,13 +97,33 @@ class MainWindow(QMainWindow):
     
     def __init__(self):
         super().__init__()
-        self.base_url = "https://gis.ccom.unh.edu/server/rest/services/WGOM_LI_SNE/WGOM_LI_SNE_BTY_4m_20231005_WMAS_IS/ImageServer"
+        # Data source configurations
+        self.data_sources = {
+            "WGOM-LI-SNE Hi Resolution": {
+                "url": "https://gis.ccom.unh.edu/server/rest/services/WGOM_LI_SNE/WGOM_LI_SNE_BTY_4m_20231005_WMAS_IS/ImageServer",
+                "bathymetry_raster_function": "DAR - StdDev - BlueGreen",
+                "hillshade_raster_function": "Multidirectional Hillshade 3x",
+                "default_extent": (-8254538.5, 4898559.25, -7411670.5, 5636075.25)
+            },
+            "WGOM-LI-SNE Regional": {
+                "url": "https://gis.ccom.unh.edu/server/rest/services/WGOM_LI_SNE/WGOM_LI_SNE_Regional_Bathymetry_16m_WMAS_IS/ImageServer",
+                "bathymetry_raster_function": "DAR - StdDev - BlueGreen",
+                "hillshade_raster_function": "Multidirectional Hillshade 3x",
+                "default_extent": (-8360732.50001078, 4893599.25001255, -7454540.50001078, 5636591.25001255)
+            }
+        }
+        self.current_data_source = "WGOM-LI-SNE Hi Resolution"  # Default data source
+        self.base_url = self.data_sources[self.current_data_source]["url"]
         # Use known extent as fallback (will be updated when service info loads)
-        self.service_extent = (-8254538.5, 4898559.25, -7411670.5, 5636075.25)
+        self.service_extent = self.data_sources[self.current_data_source]["default_extent"]
         self.downloader = None
         self.service_loader = None
+        self._updating_coordinates = False  # Flag to prevent recursive updates
+        self.output_directory = None  # Store selected output directory
+        self.config_file = "ccom_downloader_config.json"  # Config file path
         
         self.init_ui()
+        self.load_config()  # Load saved output directory
         self.load_service_info()
         
     def init_ui(self):
@@ -132,7 +153,7 @@ class MainWindow(QMainWindow):
         map_controls.addWidget(self.clear_selection_btn)
         map_controls.addStretch()
         
-        # Raster function is fixed to "DAR - StdDev - BlueGreen"
+        # Raster function will be set based on data source
         
         map_layout.addLayout(map_controls)
         
@@ -171,11 +192,25 @@ class MainWindow(QMainWindow):
         map_layout.addWidget(self.loading_label)
         
         self.map_group.setLayout(map_layout)
-        main_layout.addWidget(self.map_group, stretch=2)
+        main_layout.addWidget(self.map_group)
         
         # Right panel - Controls
         right_panel = QWidget()
+        right_panel.setFixedWidth(480)  # Fixed width: 40% of 1200px default window size
         right_layout = QVBoxLayout(right_panel)
+        
+        # Data Source selection
+        data_source_group = QGroupBox("Data Source")
+        data_source_layout = QVBoxLayout()
+        
+        self.data_source_combo = QComboBox()
+        self.data_source_combo.addItems(list(self.data_sources.keys()))
+        self.data_source_combo.setCurrentText(self.current_data_source)
+        self.data_source_combo.currentTextChanged.connect(self.on_data_source_changed)
+        data_source_layout.addWidget(self.data_source_combo)
+        
+        data_source_group.setLayout(data_source_layout)
+        right_layout.addWidget(data_source_group)
         
         # Selection info
         selection_group = QGroupBox("Selected Area")
@@ -206,6 +241,12 @@ class MainWindow(QMainWindow):
         webmercator_layout.addWidget(QLabel("YMax:"))
         webmercator_layout.addWidget(self.ymax_edit)
         
+        # Connect WebMercator field changes to update Geographic and map
+        self.xmin_edit.editingFinished.connect(self.on_webmercator_changed)
+        self.ymin_edit.editingFinished.connect(self.on_webmercator_changed)
+        self.xmax_edit.editingFinished.connect(self.on_webmercator_changed)
+        self.ymax_edit.editingFinished.connect(self.on_webmercator_changed)
+        
         webmercator_group.setLayout(webmercator_layout)
         selection_coords_layout.addWidget(webmercator_group)
         
@@ -215,16 +256,18 @@ class MainWindow(QMainWindow):
         
         self.west_edit = QLineEdit()
         self.west_edit.setPlaceholderText("West")
-        self.west_edit.setReadOnly(True)  # Read-only, calculated from WebMercator
         self.south_edit = QLineEdit()
         self.south_edit.setPlaceholderText("South")
-        self.south_edit.setReadOnly(True)
         self.east_edit = QLineEdit()
         self.east_edit.setPlaceholderText("East")
-        self.east_edit.setReadOnly(True)
         self.north_edit = QLineEdit()
         self.north_edit.setPlaceholderText("North")
-        self.north_edit.setReadOnly(True)
+        
+        # Connect Geographic field changes to update WebMercator and map
+        self.west_edit.editingFinished.connect(self.on_geographic_changed)
+        self.south_edit.editingFinished.connect(self.on_geographic_changed)
+        self.east_edit.editingFinished.connect(self.on_geographic_changed)
+        self.north_edit.editingFinished.connect(self.on_geographic_changed)
         
         geographic_layout.addWidget(QLabel("West:"))
         geographic_layout.addWidget(self.west_edit)
@@ -268,6 +311,20 @@ class MainWindow(QMainWindow):
         output_group.setLayout(output_layout)
         right_layout.addWidget(output_group)
         
+        # Output directory selection
+        output_dir_btn = QPushButton("Select Output Directory")
+        output_dir_btn.clicked.connect(self.select_output_directory)
+        right_layout.addWidget(output_dir_btn)
+        
+        output_dir_layout = QHBoxLayout()
+        output_dir_layout.addWidget(QLabel("Directory:"))
+        self.output_dir_edit = QLineEdit()
+        self.output_dir_edit.setPlaceholderText("Not set")
+        self.output_dir_edit.setReadOnly(True)  # Make it read-only, user clicks button to change
+        output_dir_layout.addWidget(self.output_dir_edit, stretch=1)
+        
+        right_layout.addLayout(output_dir_layout)
+        
         # Download button
         self.download_btn = QPushButton("Download Selected Area")
         self.download_btn.clicked.connect(self.start_download)
@@ -302,7 +359,11 @@ class MainWindow(QMainWindow):
         
         right_layout.addStretch()
         
-        main_layout.addWidget(right_panel, stretch=1)
+        main_layout.addWidget(right_panel)
+        
+        # Map panel will take all remaining space (stretch=1), right panel has fixed width
+        main_layout.setStretch(0, 1)  # Map panel: takes remaining space
+        main_layout.setStretch(1, 0)  # Right panel: fixed width, no stretch
         
     def load_service_info(self):
         """Load service information from REST endpoint in background thread."""
@@ -342,16 +403,43 @@ class MainWindow(QMainWindow):
         if self.map_widget:
             self.log_message(f"Updating map extent: {self.service_extent}")
             self.map_widget.extent = self.service_extent
+            self.map_widget.base_url = self.base_url
+            
+            # Update raster functions from current data source
+            new_raster_function = self.data_sources[self.current_data_source]["bathymetry_raster_function"]
+            new_hillshade_raster_function = self.data_sources[self.current_data_source]["hillshade_raster_function"]
+            self.map_widget.raster_function = new_raster_function
+            self.map_widget.hillshade_raster_function = new_hillshade_raster_function
+            
             # Only reload if map hasn't been loaded yet and isn't currently loading
             if not self.map_widget.map_loaded and not getattr(self.map_widget, '_loading', False):
                 self.map_widget.map_loaded = False  # Reset flag to allow reload
-                QTimer.singleShot(300, self.map_widget.load_map)  # Longer delay to avoid conflicts
+                QTimer.singleShot(300, lambda: self._reload_map_with_selection())
+            else:
+                # Map already loaded, just reload it
+                QTimer.singleShot(300, lambda: self._reload_map_with_selection())
         else:
             self.log_message("ERROR: Map widget is None after initialization attempt")
             
     def on_service_info_error(self, error_message):
-        """Handle service info load error."""
+        """Handle service info load error with helpful message."""
+        # Log the error
         self.log_message(error_message)
+        
+        # Show error message with suggestion to check for updates
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Icon.Warning)
+        msg.setWindowTitle("Connection Error")
+        msg.setText(
+            f"Unable to connect to the REST endpoint.\n\n"
+            f"{error_message}\n\n"
+            f"If this problem persists, please:\n"
+            f"1. Check for a new version at: https://github.com/seamapper/CCOM_Downloader\n"
+            f"2. Contact: pjohnson@ccom.unh.edu"
+        )
+        msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+        msg.exec()
+        
         # Continue with default extent - map should already be initialized
             
     def init_map_widget(self):
@@ -405,17 +493,19 @@ class MainWindow(QMainWindow):
         # Create map widget if it doesn't exist
         if self.map_widget is None:
             try:
-                # Use fixed raster function
-                raster_function = "DAR - StdDev - BlueGreen"
+                # Get raster functions from current data source
+                raster_function = self.data_sources[self.current_data_source]["bathymetry_raster_function"]
+                hillshade_raster_function = self.data_sources[self.current_data_source]["hillshade_raster_function"]
                 show_basemap = self.basemap_checkbox.isChecked() if hasattr(self, 'basemap_checkbox') else True
                 show_hillshade = self.hillshade_checkbox.isChecked() if hasattr(self, 'hillshade_checkbox') else True
                 use_blend = self.blend_checkbox.isChecked() if hasattr(self, 'blend_checkbox') else True
                 initial_opacity = self.opacity_slider.value() / 100.0 if hasattr(self, 'opacity_slider') else 1.0
                 self.log_message(f"Creating MapWidget with extent: {self.service_extent}, raster function: {raster_function}, show_basemap: {show_basemap}, show_hillshade: {show_hillshade}, use_blend: {use_blend}")
-                self.map_widget = MapWidget(self.base_url, self.service_extent, raster_function=raster_function, show_basemap=show_basemap, show_hillshade=show_hillshade, use_blend=use_blend)
+                self.map_widget = MapWidget(self.base_url, self.service_extent, raster_function=raster_function, show_basemap=show_basemap, show_hillshade=show_hillshade, use_blend=use_blend, hillshade_raster_function=hillshade_raster_function)
                 self.map_widget.bathymetry_opacity = initial_opacity
                 self.map_widget.selectionChanged.connect(self.on_selection_changed)
                 self.map_widget.selectionCompleted.connect(self.on_selection_completed)
+                self.map_widget.mapFirstLoaded.connect(self.on_map_first_loaded)
                 layout.addWidget(self.map_widget)
                 self.map_widget.show()
                 # Force UI update
@@ -493,38 +583,168 @@ class MainWindow(QMainWindow):
             self.map_widget.bathymetry_opacity = opacity
             self.map_widget.update()  # Trigger repaint
             
+    def check_and_update_download_button(self):
+        """Check if selection is valid and within size limits, update download button state."""
+        # Check if there's a valid selection
+        bbox = None
+        if hasattr(self, 'selected_bbox') and self.selected_bbox:
+            bbox = self.selected_bbox
+        elif self.map_widget:
+            bbox = self.map_widget.get_selection_bbox()
+        
+        if not bbox:
+            # No selection - disable button
+            self.download_btn.setEnabled(False)
+            return
+        
+        # Check if selection exceeds maximum size
+        try:
+            xmin, ymin, xmax, ymax = bbox
+            cell_size = float(self.cell_size_combo.currentText()) if hasattr(self, 'cell_size_combo') else 4.0
+            width_meters = xmax - xmin
+            height_meters = ymax - ymin
+            pixels_width = int(width_meters / cell_size)
+            pixels_height = int(height_meters / cell_size)
+            max_size = 14000
+            
+            if pixels_width > max_size or pixels_height > max_size:
+                # Selection too large - disable button
+                self.download_btn.setEnabled(False)
+            else:
+                # Valid selection - enable button
+                self.download_btn.setEnabled(True)
+        except Exception:
+            # Error calculating - disable button to be safe
+            self.download_btn.setEnabled(False)
+    
     def on_cell_size_changed(self, cell_size_text):
         """Handle cell size change - update pixel count if selection exists."""
         # Update pixel count display if there's a current selection
         if hasattr(self, 'selected_bbox') and self.selected_bbox:
             xmin, ymin, xmax, ymax = self.selected_bbox
-            self.update_coordinate_display(xmin, ymin, xmax, ymax)
+            self.update_coordinate_display(xmin, ymin, xmax, ymax, update_map=False)
+        # Update download button state
+        self.check_and_update_download_button()
             
-    def update_coordinate_display(self, xmin, ymin, xmax, ymax):
-        """Update both WebMercator and Geographic coordinate displays."""
-        # Update WebMercator coordinates
-        self.xmin_edit.setText(f"{xmin:.2f}")
-        self.ymin_edit.setText(f"{ymin:.2f}")
-        self.xmax_edit.setText(f"{xmax:.2f}")
-        self.ymax_edit.setText(f"{ymax:.2f}")
-        
-        # Convert to Geographic (WGS84) coordinates
+    def on_webmercator_changed(self):
+        """Handle manual entry in WebMercator fields."""
+        if self._updating_coordinates:
+            return
+            
         try:
-            transformer = pyproj.Transformer.from_crs("EPSG:3857", "EPSG:4326", always_xy=True)
-            west, south = transformer.transform(xmin, ymin)
-            east, north = transformer.transform(xmax, ymax)
+            # Get values from WebMercator fields
+            xmin_text = self.xmin_edit.text().strip()
+            ymin_text = self.ymin_edit.text().strip()
+            xmax_text = self.xmax_edit.text().strip()
+            ymax_text = self.ymax_edit.text().strip()
             
-            # Update Geographic coordinates
-            self.west_edit.setText(f"{west:.6f}")
-            self.south_edit.setText(f"{south:.6f}")
-            self.east_edit.setText(f"{east:.6f}")
-            self.north_edit.setText(f"{north:.6f}")
-        except Exception as e:
-            # If conversion fails, clear geographic fields
-            self.west_edit.clear()
-            self.south_edit.clear()
-            self.east_edit.clear()
-            self.north_edit.clear()
+            # Check if all fields have values
+            if not (xmin_text and ymin_text and xmax_text and ymax_text):
+                return
+            
+            xmin = float(xmin_text)
+            ymin = float(ymin_text)
+            xmax = float(xmax_text)
+            ymax = float(ymax_text)
+            
+            # Validate that min < max
+            if xmin >= xmax or ymin >= ymax:
+                QMessageBox.warning(self, "Invalid Coordinates", "XMin must be less than XMax and YMin must be less than YMax.")
+                return
+            
+            # Update the selection
+            self.update_coordinate_display(xmin, ymin, xmax, ymax, update_map=True)
+            # Button state will be updated by update_coordinate_display
+            
+        except ValueError:
+            QMessageBox.warning(self, "Invalid Input", "Please enter valid numeric coordinates.")
+            self.check_and_update_download_button()  # Disable button on invalid input
+            
+    def on_geographic_changed(self):
+        """Handle manual entry in Geographic fields."""
+        if self._updating_coordinates:
+            return
+            
+        try:
+            # Get values from Geographic fields
+            west_text = self.west_edit.text().strip()
+            south_text = self.south_edit.text().strip()
+            east_text = self.east_edit.text().strip()
+            north_text = self.north_edit.text().strip()
+            
+            # Check if all fields have values
+            if not (west_text and south_text and east_text and north_text):
+                return
+            
+            west = float(west_text)
+            south = float(south_text)
+            east = float(east_text)
+            north = float(north_text)
+            
+            # Validate that min < max
+            if west >= east or south >= north:
+                QMessageBox.warning(self, "Invalid Coordinates", "West must be less than East and South must be less than North.")
+                return
+            
+            # Convert to WebMercator
+            try:
+                transformer = pyproj.Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
+                xmin, ymin = transformer.transform(west, south)
+                xmax, ymax = transformer.transform(east, north)
+                
+                # Update the selection
+                self.update_coordinate_display(xmin, ymin, xmax, ymax, update_map=True)
+                # Button state will be updated by update_coordinate_display
+            except Exception as e:
+                QMessageBox.warning(self, "Conversion Error", f"Error converting coordinates: {str(e)}")
+                self.check_and_update_download_button()  # Disable button on conversion error
+                
+        except ValueError:
+            QMessageBox.warning(self, "Invalid Input", "Please enter valid numeric coordinates.")
+            self.check_and_update_download_button()  # Disable button on invalid input
+            
+    def update_coordinate_display(self, xmin, ymin, xmax, ymax, update_map=True):
+        """Update both WebMercator and Geographic coordinate displays."""
+        if self._updating_coordinates:
+            return  # Prevent recursive updates
+            
+        self._updating_coordinates = True
+        
+        try:
+            # Update WebMercator coordinates
+            self.xmin_edit.setText(f"{xmin:.2f}")
+            self.ymin_edit.setText(f"{ymin:.2f}")
+            self.xmax_edit.setText(f"{xmax:.2f}")
+            self.ymax_edit.setText(f"{ymax:.2f}")
+            
+            # Convert to Geographic (WGS84) coordinates
+            try:
+                transformer = pyproj.Transformer.from_crs("EPSG:3857", "EPSG:4326", always_xy=True)
+                west, south = transformer.transform(xmin, ymin)
+                east, north = transformer.transform(xmax, ymax)
+                
+                # Update Geographic coordinates
+                self.west_edit.setText(f"{west:.6f}")
+                self.south_edit.setText(f"{south:.6f}")
+                self.east_edit.setText(f"{east:.6f}")
+                self.north_edit.setText(f"{north:.6f}")
+            except Exception as e:
+                # If conversion fails, clear geographic fields
+                self.west_edit.clear()
+                self.south_edit.clear()
+                self.east_edit.clear()
+                self.north_edit.clear()
+            
+            # Update stored selection and map if requested
+            if update_map:
+                self.selected_bbox = (xmin, ymin, xmax, ymax)
+                if self.map_widget:
+                    self.zoom_to_selection(xmin, ymin, xmax, ymax)
+        finally:
+            self._updating_coordinates = False
+        
+        # Update download button state
+        self.check_and_update_download_button()
         
         # Calculate expected number of pixels based on selected cell size
         try:
@@ -575,11 +795,12 @@ class MainWindow(QMainWindow):
             self.east_edit.clear()
             self.north_edit.clear()
             self.pixel_count_label.setText("Expected pixels: --")
+            self.selected_bbox = None
             self.download_btn.setEnabled(False)
         else:
-            # Show real-time values while selecting
-            self.update_coordinate_display(xmin, ymin, xmax, ymax)
-            self.download_btn.setEnabled(True)
+            # Show real-time values while selecting (without updating map to avoid recursion)
+            self.update_coordinate_display(xmin, ymin, xmax, ymax, update_map=False)
+            # Button state will be updated by update_coordinate_display (which calls check_and_update_download_button)
             
     def on_selection_completed(self, xmin, ymin, xmax, ymax):
         """Handle selection completion (when mouse is released) - zoom to selection."""
@@ -593,7 +814,7 @@ class MainWindow(QMainWindow):
             self.map_widget.selectionChanged.connect(self.on_selection_changed)
             # Set the final bounds in the text fields after zoom (both coordinate systems)
             self.update_coordinate_display(xmin, ymin, xmax, ymax)
-            self.download_btn.setEnabled(True)
+            # Button state will be updated by update_coordinate_display (which calls check_and_update_download_button)
             
     def zoom_to_selection(self, xmin, ymin, xmax, ymax):
         """Zoom map to the selected area."""
@@ -722,17 +943,23 @@ class MainWindow(QMainWindow):
         date_time_str = current_time.strftime("%Y-%m-%d_%H-%M-%S")
         default_filename = f"CCOM_Bathy_{int(cell_size)}m_{date_time_str}.tif"
         
-        # Prompt for save location
-        output_path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Save GeoTIFF",
-            default_filename,
-            "GeoTIFF Files (*.tif *.tiff);;All Files (*)"
-        )
-        
-        # If user cancelled the dialog, abort download
-        if not output_path:
-            return
+        # Check if output directory has been selected
+        if self.output_directory and os.path.isdir(self.output_directory):
+            # Use the selected output directory without prompting
+            output_path = os.path.join(self.output_directory, default_filename)
+        else:
+            # No output directory selected - prompt for save location
+            default_path = default_filename
+            output_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Save GeoTIFF",
+                default_path,
+                "GeoTIFF Files (*.tif *.tiff);;All Files (*)"
+            )
+            
+            # If user cancelled the dialog, abort download
+            if not output_path:
+                return
         
         # Disable download button
         self.download_btn.setEnabled(False)
@@ -771,6 +998,21 @@ class MainWindow(QMainWindow):
         self.status_label.setText(f"Error: {error_message}")
         self.log_message(f"✗ Error: {error_message}")
         self.download_btn.setEnabled(True)
+        
+        # Check if it's a connection error and show helpful message
+        if "connection" in error_message.lower() or "timeout" in error_message.lower() or "network" in error_message.lower() or "rest endpoint" in error_message.lower():
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Icon.Warning)
+            msg.setWindowTitle("Connection Error")
+            msg.setText(
+                f"Unable to connect to the REST endpoint.\n\n"
+                f"{error_message}\n\n"
+                f"If this problem persists, please:\n"
+                f"1. Check for a new version at: https://github.com/seamapper/CCOM_Downloader\n"
+                f"2. Contact: pjohnson@ccom.unh.edu"
+            )
+            msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+            msg.exec()
         QMessageBox.critical(self, "Download Error", error_message)
         
     def log_message(self, message):
@@ -780,6 +1022,26 @@ class MainWindow(QMainWindow):
         scrollbar = self.log_text.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
         
+    def resizeEvent(self, event):
+        """Handle window resize event - refresh map display."""
+        super().resizeEvent(event)
+        # Refresh map when window is resized (with a small delay to avoid multiple refreshes)
+        if self.map_widget and self.map_widget.map_loaded:
+            # Use a timer to debounce rapid resize events
+            if not hasattr(self, '_resize_timer'):
+                self._resize_timer = QTimer()
+                self._resize_timer.setSingleShot(True)
+                self._resize_timer.timeout.connect(self._refresh_map_on_resize)
+            
+            # Restart timer - will trigger refresh 300ms after resize stops
+            self._resize_timer.stop()
+            self._resize_timer.start(300)
+    
+    def _refresh_map_on_resize(self):
+        """Refresh map display after window resize."""
+        if self.map_widget and self.map_widget.map_loaded:
+            self.map_widget.load_map()
+    
     def closeEvent(self, event):
         """Handle window close event."""
         if self.downloader and self.downloader.isRunning():
@@ -796,6 +1058,140 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
         event.accept()
+    
+    def load_config(self):
+        """Load configuration from JSON file."""
+        try:
+            if os.path.exists(self.config_file):
+                with open(self.config_file, 'r') as f:
+                    config = json.load(f)
+                    self.output_directory = config.get('output_directory')
+                    # Update edit field if it exists (it should after init_ui)
+                    if hasattr(self, 'output_dir_edit'):
+                        if self.output_directory and os.path.isdir(self.output_directory):
+                            self.output_dir_edit.setText(self.output_directory)
+                        else:
+                            self.output_directory = None
+                            self.output_dir_edit.clear()
+                    elif not (self.output_directory and os.path.isdir(self.output_directory)):
+                        self.output_directory = None
+        except Exception as e:
+            # If config file is corrupted or can't be read, just use defaults
+            self.output_directory = None
+            if hasattr(self, 'output_dir_edit'):
+                self.output_dir_edit.clear()
+    
+    def save_config(self):
+        """Save configuration to JSON file."""
+        try:
+            config = {
+                'output_directory': self.output_directory
+            }
+            with open(self.config_file, 'w') as f:
+                json.dump(config, f, indent=2)
+        except Exception as e:
+            # If we can't save config, just continue - it's not critical
+            pass
+    
+    def select_output_directory(self):
+        """Open dialog to select output directory."""
+        # Start with current directory or saved directory
+        start_dir = self.output_directory if self.output_directory and os.path.isdir(self.output_directory) else os.getcwd()
+        
+        directory = QFileDialog.getExistingDirectory(
+            self,
+            "Select Output Directory",
+            start_dir,
+            QFileDialog.Option.ShowDirsOnly | QFileDialog.Option.DontResolveSymlinks
+        )
+        
+        if directory:
+            self.output_directory = directory
+            self.output_dir_edit.setText(directory)
+            self.save_config()  # Save to config file
+    
+    def on_map_first_loaded(self):
+        """Handle first successful map load - show instructions."""
+        instructions = [
+            "",
+            "=" * 60,
+            "Map loaded successfully!",
+            "=" * 60,
+            "",
+            "To select an area:",
+            "  1. Click and drag with the left mouse button on the map",
+            "  2. The selected area will be shown with a purple dashed box",
+            "  3. You can also manually enter coordinates in the WebMercator or Geographic fields",
+            "",
+            "To download the selected area:",
+            "  1. Select an area on the map (or enter coordinates)",
+            "  2. Choose your output options (Cell Size, CRS)",
+            "  3. Click 'Download Selected Area' button",
+            "  4. Choose a filename and location (defaults to selected directory)",
+            "",
+            "Map controls:",
+            "  - Mouse wheel: Zoom in/out (centered on window)",
+            "  - Middle mouse button + drag: Pan the map",
+            "  - Left mouse button + drag: Select area",
+            "",
+            "=" * 60
+        ]
+        
+        for line in instructions:
+            self.log_message(line)
+    
+    def on_data_source_changed(self, data_source_name):
+        """Handle data source selection change."""
+        if data_source_name not in self.data_sources:
+            return
+        
+        # Store current selection if it exists
+        saved_selection = None
+        if hasattr(self, 'selected_bbox') and self.selected_bbox:
+            saved_selection = self.selected_bbox
+        
+        # Update current data source
+        self.current_data_source = data_source_name
+        self.base_url = self.data_sources[data_source_name]["url"]
+        self.service_extent = self.data_sources[data_source_name]["default_extent"]
+        
+        # Update map widget settings if it exists
+        if self.map_widget:
+            # Update raster functions
+            new_raster_function = self.data_sources[data_source_name]["bathymetry_raster_function"]
+            new_hillshade_raster_function = self.data_sources[data_source_name]["hillshade_raster_function"]
+            self.map_widget.raster_function = new_raster_function
+            self.map_widget.hillshade_raster_function = new_hillshade_raster_function
+            self.map_widget.base_url = self.base_url
+        
+        # Reload service info (this will update extent and reload map)
+        self.load_service_info()
+        
+        # Store selection to restore after map loads
+        self._pending_selection = saved_selection
+    
+    def _reload_map_with_selection(self):
+        """Reload map and restore selection if it exists."""
+        # Reload the map
+        if self.map_widget:
+            self.map_widget.load_map()
+            
+            # Restore selection if it was saved
+            if hasattr(self, '_pending_selection') and self._pending_selection:
+                # Wait a bit for map to load, then restore selection
+                QTimer.singleShot(1000, lambda: self._restore_selection())
+    
+    def _restore_selection(self):
+        """Restore a previously saved selection."""
+        if hasattr(self, '_pending_selection') and self._pending_selection:
+            bbox = self._pending_selection
+            self.selected_bbox = bbox
+            
+            # Update coordinate displays
+            self.update_coordinate_display(bbox[0], bbox[1], bbox[2], bbox[3], update_map=True)
+            
+            # Clear pending selection
+            self._pending_selection = None
 
 
 def main():

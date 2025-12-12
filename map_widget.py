@@ -159,8 +159,9 @@ class MapWidget(QWidget):
     
     selectionChanged = pyqtSignal(float, float, float, float)  # xmin, ymin, xmax, ymax
     selectionCompleted = pyqtSignal(float, float, float, float)  # xmin, ymin, xmax, ymax - emitted when selection is finished
+    mapFirstLoaded = pyqtSignal()  # Emitted when map is successfully loaded for the first time
     
-    def __init__(self, base_url, initial_extent, parent=None, raster_function="Shaded Relief - Haxby - MD Hillshade 2", show_basemap=True, show_hillshade=True, use_blend=False):
+    def __init__(self, base_url, initial_extent, parent=None, raster_function="Shaded Relief - Haxby - MD Hillshade 2", show_basemap=True, show_hillshade=True, use_blend=False, hillshade_raster_function="Multidirectional Hillshade 3x"):
         super().__init__(parent)
         self.base_url = base_url
         self.extent = initial_extent  # (xmin, ymin, xmax, ymax)
@@ -177,12 +178,17 @@ class MapWidget(QWidget):
         self.is_panning = False
         self.pan_start = None
         self.raster_function = raster_function
+        self.hillshade_raster_function = hillshade_raster_function  # Raster function for hillshade layer
         self.map_loaded = False
+        self._first_load_complete = False  # Track if first load has completed
         self._loading = False  # Flag to prevent multiple simultaneous loads
+        self._active_loaders = []  # Track active loaders
+        self._load_timer = None  # Timer for debouncing zoom operations
         self.selected_bbox_world = None  # Store selected bbox in world coordinates for persistent display
         print(f"MapWidget initialized with raster function: {self.raster_function}, show_basemap: {self.show_basemap}, show_hillshade: {self.show_hillshade}, use_blend: {self.use_blend}")
         
-        self.setMinimumSize(800, 600)
+        # Set a smaller minimum size to allow 60/40 split (60% of 1200 = 720px)
+        self.setMinimumSize(600, 400)
         self.setMouseTracking(True)
         
         # Don't load map immediately - wait for widget to be shown and sized
@@ -203,13 +209,66 @@ class MapWidget(QWidget):
             print("Scheduling map load via timer...")
             QTimer.singleShot(100, self.load_map)
             
+    def _stop_all_loaders(self):
+        """Stop all active loaders."""
+        loaders_to_stop = []
+        if hasattr(self, 'loader') and self.loader:
+            loaders_to_stop.append(self.loader)
+        if hasattr(self, 'basemap_loader') and self.basemap_loader:
+            loaders_to_stop.append(self.basemap_loader)
+        if hasattr(self, 'hillshade_loader') and self.hillshade_loader:
+            loaders_to_stop.append(self.hillshade_loader)
+        
+        for loader in loaders_to_stop:
+            if loader.isRunning():
+                loader.terminate()
+                loader.wait(500)  # Wait up to 500ms
+                if loader.isRunning():
+                    # Force kill if still running
+                    loader.terminate()
+                    loader.wait(500)
+        
+        # Disconnect all signals to prevent callbacks from dead threads
+        for loader in loaders_to_stop:
+            try:
+                loader.tileLoaded.disconnect()
+                loader.finished.disconnect()
+            except:
+                pass
+        
+        self._active_loaders = []
+    
+    def _check_all_loaders_finished(self):
+        """Check if all loaders are finished and reset loading flag."""
+        if not self._loading:
+            return
+        
+        all_finished = True
+        if hasattr(self, 'loader') and self.loader and self.loader.isRunning():
+            all_finished = False
+        if hasattr(self, 'basemap_loader') and self.basemap_loader and self.basemap_loader.isRunning():
+            all_finished = False
+        if hasattr(self, 'hillshade_loader') and self.hillshade_loader and self.hillshade_loader.isRunning():
+            all_finished = False
+        
+        if all_finished:
+            self._loading = False
+    
     def load_map(self):
         """Load map for current extent."""
+        # Cancel any pending load timer
+        if self._load_timer:
+            self._load_timer.stop()
+            self._load_timer = None
+        
         # Prevent multiple simultaneous loads
-        if hasattr(self, '_loading') and self._loading:
+        if self._loading:
             print("load_map() already in progress, skipping...")
             return
             
+        # Stop all existing loaders first
+        self._stop_all_loaders()
+        
         self._loading = True
         
         print("=" * 50)
@@ -237,34 +296,22 @@ class MapWidget(QWidget):
         print(f"Starting map load with extent: {self.extent}, size: {size}")
         print(f"Using raster function: {self.raster_function}")
         
-        # Stop any existing loaders
-        if hasattr(self, 'loader') and self.loader and self.loader.isRunning():
-            print("Stopping existing loader...")
-            self.loader.terminate()
-            self.loader.wait(1000)  # Wait up to 1 second
-        if hasattr(self, 'basemap_loader') and self.basemap_loader and self.basemap_loader.isRunning():
-            print("Stopping existing basemap loader...")
-            self.basemap_loader.terminate()
-            self.basemap_loader.wait(1000)  # Wait up to 1 second
-        if hasattr(self, 'hillshade_loader') and self.hillshade_loader and self.hillshade_loader.isRunning():
-            print("Stopping existing hillshade loader...")
-            self.hillshade_loader.terminate()
-            self.hillshade_loader.wait(1000)  # Wait up to 1 second
-        
         # Load basemap if enabled
         if self.show_basemap:
             print("Loading basemap...")
             self.basemap_loader = BasemapLoader(self.extent, size)
             self.basemap_loader.tileLoaded.connect(self.on_basemap_loaded)
-            self.basemap_loader.finished.connect(lambda: setattr(self, '_loading', False))
+            self.basemap_loader.finished.connect(self._check_all_loaders_finished)
+            self._active_loaders.append(self.basemap_loader)
             self.basemap_loader.start()
         
         # Load hillshade layer if enabled (as underlay)
         if self.show_hillshade:
             print("Loading hillshade layer...")
-            self.hillshade_loader = MapTileLoader(self.base_url, self.extent, size, "Multidirectional Hillshade 3x")
+            self.hillshade_loader = MapTileLoader(self.base_url, self.extent, size, self.hillshade_raster_function)
             self.hillshade_loader.tileLoaded.connect(self.on_hillshade_loaded)
-            self.hillshade_loader.finished.connect(lambda: setattr(self, '_loading', False))
+            self.hillshade_loader.finished.connect(self._check_all_loaders_finished)
+            self._active_loaders.append(self.hillshade_loader)
             self.hillshade_loader.start()
         
         # Load bathymetry layer (main layer)
@@ -273,7 +320,8 @@ class MapWidget(QWidget):
         print("Connecting signals...")
         self.loader.tileLoaded.connect(self.on_tile_loaded)
         self.loader.finished.connect(self.on_loader_finished)
-        self.loader.finished.connect(lambda: setattr(self, '_loading', False))
+        self.loader.finished.connect(self._check_all_loaders_finished)
+        self._active_loaders.append(self.loader)
         print("Starting loader thread...")
         self.loader.start()
         print(f"Loader thread started, isRunning: {self.loader.isRunning()}")
@@ -366,6 +414,11 @@ class MapWidget(QWidget):
             self.update()  # Trigger repaint
             self.repaint()  # Force immediate repaint
             print(f"Map tile loaded successfully: {pixmap.width()}x{pixmap.height()}")
+            
+            # Emit signal on first successful load
+            if not self._first_load_complete:
+                self._first_load_complete = True
+                self.mapFirstLoaded.emit()
         else:
             print("Error: Received null pixmap from tile loader")
             
@@ -500,7 +553,16 @@ class MapWidget(QWidget):
                 )
                 self.pan_start = current_pos
                 self.clear_selection()
-                self.load_map()
+                
+                # Debounce: Cancel any pending load and schedule a new one after a delay
+                if self._load_timer:
+                    self._load_timer.stop()
+                
+                from PyQt6.QtCore import QTimer
+                self._load_timer = QTimer()
+                self._load_timer.setSingleShot(True)
+                self._load_timer.timeout.connect(self.load_map)
+                self._load_timer.start(300)  # Wait 300ms before loading (debounce)
             
     def mouseReleaseEvent(self, event):
         """Handle mouse release for selection or panning."""
@@ -558,7 +620,16 @@ class MapWidget(QWidget):
         
         self.extent = (new_xmin, new_ymin, new_xmax, new_ymax)
         self.clear_selection()
-        self.load_map()
+        
+        # Debounce: Cancel any pending load and schedule a new one after a delay
+        if self._load_timer:
+            self._load_timer.stop()
+        
+        from PyQt6.QtCore import QTimer
+        self._load_timer = QTimer()
+        self._load_timer.setSingleShot(True)
+        self._load_timer.timeout.connect(self.load_map)
+        self._load_timer.start(300)  # Wait 300ms before loading (debounce)
         
     def resizeEvent(self, event):
         """Handle widget resize."""
