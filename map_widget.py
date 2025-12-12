@@ -160,14 +160,16 @@ class MapWidget(QWidget):
     selectionChanged = pyqtSignal(float, float, float, float)  # xmin, ymin, xmax, ymax
     selectionCompleted = pyqtSignal(float, float, float, float)  # xmin, ymin, xmax, ymax - emitted when selection is finished
     
-    def __init__(self, base_url, initial_extent, parent=None, raster_function="Shaded Relief - Haxby - MD Hillshade 2", show_basemap=True):
+    def __init__(self, base_url, initial_extent, parent=None, raster_function="Shaded Relief - Haxby - MD Hillshade 2", show_basemap=True, show_hillshade=True):
         super().__init__(parent)
         self.base_url = base_url
         self.extent = initial_extent  # (xmin, ymin, xmax, ymax)
         self.current_pixmap = QPixmap()
         self.basemap_pixmap = QPixmap()
+        self.hillshade_pixmap = QPixmap()
         self.show_basemap = show_basemap
-        self.bathymetry_opacity = 1.0  # Opacity for bathymetry layer (0.0 to 1.0) - default 100%
+        self.show_hillshade = show_hillshade
+        self.bathymetry_opacity = 0.6  # Opacity for bathymetry layer (0.0 to 1.0) - default 60%
         self.selection_start = None
         self.selection_end = None
         self.is_selecting = False
@@ -177,7 +179,7 @@ class MapWidget(QWidget):
         self.map_loaded = False
         self._loading = False  # Flag to prevent multiple simultaneous loads
         self.selected_bbox_world = None  # Store selected bbox in world coordinates for persistent display
-        print(f"MapWidget initialized with raster function: {self.raster_function}, show_basemap: {self.show_basemap}")
+        print(f"MapWidget initialized with raster function: {self.raster_function}, show_basemap: {self.show_basemap}, show_hillshade: {self.show_hillshade}")
         
         self.setMinimumSize(800, 600)
         self.setMouseTracking(True)
@@ -243,6 +245,10 @@ class MapWidget(QWidget):
             print("Stopping existing basemap loader...")
             self.basemap_loader.terminate()
             self.basemap_loader.wait(1000)  # Wait up to 1 second
+        if hasattr(self, 'hillshade_loader') and self.hillshade_loader and self.hillshade_loader.isRunning():
+            print("Stopping existing hillshade loader...")
+            self.hillshade_loader.terminate()
+            self.hillshade_loader.wait(1000)  # Wait up to 1 second
         
         # Load basemap if enabled
         if self.show_basemap:
@@ -252,7 +258,15 @@ class MapWidget(QWidget):
             self.basemap_loader.finished.connect(lambda: setattr(self, '_loading', False))
             self.basemap_loader.start()
         
-        # Load bathymetry layer
+        # Load hillshade layer if enabled (as underlay)
+        if self.show_hillshade:
+            print("Loading hillshade layer...")
+            self.hillshade_loader = MapTileLoader(self.base_url, self.extent, size, "Multidirectional Hillshade 3x")
+            self.hillshade_loader.tileLoaded.connect(self.on_hillshade_loaded)
+            self.hillshade_loader.finished.connect(lambda: setattr(self, '_loading', False))
+            self.hillshade_loader.start()
+        
+        # Load bathymetry layer (main layer)
         print("Creating MapTileLoader...")
         self.loader = MapTileLoader(self.base_url, self.extent, size, self.raster_function)
         print("Connecting signals...")
@@ -281,6 +295,24 @@ class MapWidget(QWidget):
             else:
                 self.basemap_pixmap = pixmap
             print(f"Basemap loaded: {self.basemap_pixmap.width()}x{self.basemap_pixmap.height()}")
+            self.update()  # Trigger repaint
+            
+    def on_hillshade_loaded(self, pixmap, xmin, ymin, xmax, ymax):
+        """Handle hillshade tile loaded."""
+        if not pixmap.isNull():
+            widget_size = self.size()
+            if widget_size.width() > 0 and widget_size.height() > 0:
+                if widget_size.width() == pixmap.width() and widget_size.height() == pixmap.height():
+                    self.hillshade_pixmap = pixmap
+                else:
+                    self.hillshade_pixmap = pixmap.scaled(
+                        widget_size,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation
+                    )
+            else:
+                self.hillshade_pixmap = pixmap
+            print(f"Hillshade loaded: {self.hillshade_pixmap.width()}x{self.hillshade_pixmap.height()}")
             self.update()  # Trigger repaint
         
     def on_loader_finished(self):
@@ -545,7 +577,7 @@ class MapWidget(QWidget):
         
         widget_rect = self.rect()
         
-        # Draw basemap first (if available)
+        # Draw basemap first (if available) - bottom layer
         if self.show_basemap and not self.basemap_pixmap.isNull():
             basemap_rect = self.basemap_pixmap.rect()
             x = (widget_rect.width() - basemap_rect.width()) // 2
@@ -556,7 +588,18 @@ class MapWidget(QWidget):
             # Fill background if no basemap
             painter.fillRect(self.rect(), QColor(240, 240, 240))
         
-        # Draw bathymetry layer on top (with opacity)
+        # Draw hillshade layer (if available) - middle layer (underlay) at full opacity
+        if self.show_hillshade and not self.hillshade_pixmap.isNull():
+            hillshade_rect = self.hillshade_pixmap.rect()
+            x = (widget_rect.width() - hillshade_rect.width()) // 2
+            y = (widget_rect.height() - hillshade_rect.height()) // 2
+            target_rect = QRect(x, y, hillshade_rect.width(), hillshade_rect.height())
+            # Ensure full opacity for hillshade (opacity only affects top layer)
+            painter.setOpacity(1.0)
+            painter.drawPixmap(target_rect, self.hillshade_pixmap)
+        
+        # Draw bathymetry layer on top (with opacity) - top layer
+        # Only this layer uses the opacity setting
         if not self.current_pixmap.isNull():
             pixmap_rect = self.current_pixmap.rect()
             
@@ -565,10 +608,10 @@ class MapWidget(QWidget):
             y = (widget_rect.height() - pixmap_rect.height()) // 2
             target_rect = QRect(x, y, pixmap_rect.width(), pixmap_rect.height())
             
-            # Draw with opacity
+            # Draw with opacity (only the top layer uses opacity)
             painter.setOpacity(self.bathymetry_opacity)
             painter.drawPixmap(target_rect, self.current_pixmap)
-            painter.setOpacity(1.0)  # Reset opacity
+            painter.setOpacity(1.0)  # Reset opacity for subsequent drawing
         elif not self.show_basemap:
             # Draw placeholder only if basemap is not shown
             painter.fillRect(self.rect(), QColor(200, 200, 200))

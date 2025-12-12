@@ -21,14 +21,14 @@ class BathymetryDownloader(QThread):
     error = pyqtSignal(str)  # Error message
     
     def __init__(self, base_url, bbox, output_path, output_crs="EPSG:3857", 
-                 pixel_size=None, max_size=15000):
+                 pixel_size=None, max_size=14000):
         super().__init__()
         self.base_url = base_url
         self.bbox = bbox  # (xmin, ymin, xmax, ymax) in EPSG:3857
         self.output_path = output_path
         self.output_crs = output_crs
         self.pixel_size = pixel_size  # If None, use service default (4m)
-        self.max_size = max_size  # Maximum image size from service
+        self.max_size = max_size  # Maximum image size (width and height) from service
         self.cancelled = False
         
     def cancel(self):
@@ -50,11 +50,17 @@ class BathymetryDownloader(QThread):
                 width = int((xmax - xmin) / 4.0)
                 height = int((ymax - ymin) / 4.0)
                 
-            # Limit to max size, maintaining aspect ratio
+            # Check if size exceeds maximum (14,000 x 14,000 pixels)
             if width > self.max_size or height > self.max_size:
-                scale = min(self.max_size / width, self.max_size / height)
-                width = int(width * scale)
-                height = int(height * scale)
+                error_msg = (
+                    f"Selected area exceeds maximum download size ({self.max_size} x {self.max_size} pixels).\n"
+                    f"Requested size: {width} x {height} pixels.\n\n"
+                    f"Please either:\n"
+                    f"1. Select a smaller area, or\n"
+                    f"2. Increase the cell size (currently {self.pixel_size if self.pixel_size else 4}m)"
+                )
+                self.error.emit(error_msg)
+                return
                 
             self.status.emit(f"Requesting data: {width}x{height} pixels...")
             self.progress.emit(10)

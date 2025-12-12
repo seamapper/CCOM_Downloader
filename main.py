@@ -11,6 +11,7 @@ from map_widget import MapWidget
 from download_module import BathymetryDownloader
 import requests
 import json
+import pyproj
 
 
 class ServiceInfoLoader(QThread):
@@ -103,12 +104,7 @@ class MainWindow(QMainWindow):
         map_controls.addWidget(self.clear_selection_btn)
         map_controls.addStretch()
         
-        # Raster function selector
-        map_controls.addWidget(QLabel("Raster Function:"))
-        self.raster_function_combo = QComboBox()
-        self.raster_function_combo.addItem("Shaded Relief - Haxby - MD Hillshade 2")  # Default
-        self.raster_function_combo.currentTextChanged.connect(self.on_raster_function_changed)
-        map_controls.addWidget(self.raster_function_combo)
+        # Raster function is fixed to "DAR - StdDev - BlueGreen"
         
         map_layout.addLayout(map_controls)
         
@@ -119,11 +115,16 @@ class MainWindow(QMainWindow):
         self.basemap_checkbox.stateChanged.connect(self.on_basemap_toggled)
         basemap_controls.addWidget(self.basemap_checkbox)
         
+        self.hillshade_checkbox = QCheckBox("Show Bathymetry Hillshade")
+        self.hillshade_checkbox.setChecked(True)  # On by default
+        self.hillshade_checkbox.stateChanged.connect(self.on_hillshade_toggled)
+        basemap_controls.addWidget(self.hillshade_checkbox)
+        
         basemap_controls.addWidget(QLabel("Opacity:"))
         self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
         self.opacity_slider.setMinimum(0)
         self.opacity_slider.setMaximum(100)
-        self.opacity_slider.setValue(100)  # 100% opacity (fully opaque)
+        self.opacity_slider.setValue(60)  # 60% opacity by default
         self.opacity_slider.setMaximumWidth(100)
         self.opacity_slider.valueChanged.connect(self.on_opacity_changed)
         basemap_controls.addWidget(self.opacity_slider)
@@ -145,7 +146,14 @@ class MainWindow(QMainWindow):
         
         # Selection info
         selection_group = QGroupBox("Selected Area")
-        selection_layout = QVBoxLayout()
+        selection_main_layout = QVBoxLayout()
+        
+        # Horizontal layout for coordinate groupboxes
+        selection_coords_layout = QHBoxLayout()
+        
+        # WebMercator groupbox (left)
+        webmercator_group = QGroupBox("WebMercator")
+        webmercator_layout = QVBoxLayout()
         
         self.xmin_edit = QLineEdit()
         self.xmin_edit.setPlaceholderText("XMin")
@@ -156,21 +164,68 @@ class MainWindow(QMainWindow):
         self.ymax_edit = QLineEdit()
         self.ymax_edit.setPlaceholderText("YMax")
         
-        selection_layout.addWidget(QLabel("XMin:"))
-        selection_layout.addWidget(self.xmin_edit)
-        selection_layout.addWidget(QLabel("YMin:"))
-        selection_layout.addWidget(self.ymin_edit)
-        selection_layout.addWidget(QLabel("XMax:"))
-        selection_layout.addWidget(self.xmax_edit)
-        selection_layout.addWidget(QLabel("YMax:"))
-        selection_layout.addWidget(self.ymax_edit)
+        webmercator_layout.addWidget(QLabel("XMin:"))
+        webmercator_layout.addWidget(self.xmin_edit)
+        webmercator_layout.addWidget(QLabel("YMin:"))
+        webmercator_layout.addWidget(self.ymin_edit)
+        webmercator_layout.addWidget(QLabel("XMax:"))
+        webmercator_layout.addWidget(self.xmax_edit)
+        webmercator_layout.addWidget(QLabel("YMax:"))
+        webmercator_layout.addWidget(self.ymax_edit)
         
-        selection_group.setLayout(selection_layout)
+        webmercator_group.setLayout(webmercator_layout)
+        selection_coords_layout.addWidget(webmercator_group)
+        
+        # Geographic groupbox (right)
+        geographic_group = QGroupBox("Geographic")
+        geographic_layout = QVBoxLayout()
+        
+        self.west_edit = QLineEdit()
+        self.west_edit.setPlaceholderText("West")
+        self.west_edit.setReadOnly(True)  # Read-only, calculated from WebMercator
+        self.south_edit = QLineEdit()
+        self.south_edit.setPlaceholderText("South")
+        self.south_edit.setReadOnly(True)
+        self.east_edit = QLineEdit()
+        self.east_edit.setPlaceholderText("East")
+        self.east_edit.setReadOnly(True)
+        self.north_edit = QLineEdit()
+        self.north_edit.setPlaceholderText("North")
+        self.north_edit.setReadOnly(True)
+        
+        geographic_layout.addWidget(QLabel("West:"))
+        geographic_layout.addWidget(self.west_edit)
+        geographic_layout.addWidget(QLabel("South:"))
+        geographic_layout.addWidget(self.south_edit)
+        geographic_layout.addWidget(QLabel("East:"))
+        geographic_layout.addWidget(self.east_edit)
+        geographic_layout.addWidget(QLabel("North:"))
+        geographic_layout.addWidget(self.north_edit)
+        
+        geographic_group.setLayout(geographic_layout)
+        selection_coords_layout.addWidget(geographic_group)
+        
+        selection_main_layout.addLayout(selection_coords_layout)
+        
+        # Pixel count display at the bottom
+        self.pixel_count_label = QLabel("Expected pixels: --")
+        self.pixel_count_label.setStyleSheet("font-weight: bold; padding: 5px;")
+        selection_main_layout.addWidget(self.pixel_count_label)
+        
+        selection_group.setLayout(selection_main_layout)
         right_layout.addWidget(selection_group)
         
         # Output options
         output_group = QGroupBox("Output Options")
         output_layout = QVBoxLayout()
+        
+        # Cell size selector
+        output_layout.addWidget(QLabel("Cell Size (m):"))
+        self.cell_size_combo = QComboBox()
+        self.cell_size_combo.addItems(["4", "8", "16"])
+        self.cell_size_combo.setCurrentText("4")  # Default to 4m
+        self.cell_size_combo.currentTextChanged.connect(self.on_cell_size_changed)
+        output_layout.addWidget(self.cell_size_combo)
         
         output_layout.addWidget(QLabel("Output CRS:"))
         self.crs_combo = QComboBox()
@@ -252,23 +307,7 @@ class MainWindow(QMainWindow):
         )
         self.log_message("Service info loaded successfully")
         
-        # Update raster function combo box with available functions
-        raster_functions = service_data.get("raster_functions", [])
-        if raster_functions:
-            current_selection = self.raster_function_combo.currentText()
-            self.raster_function_combo.clear()
-            self.raster_function_combo.addItems(raster_functions)
-            # Try to restore previous selection or use default
-            index = self.raster_function_combo.findText(current_selection)
-            if index >= 0:
-                self.raster_function_combo.setCurrentIndex(index)
-            else:
-                # Try to find the default
-                default_index = self.raster_function_combo.findText("Shaded Relief - Haxby - MD Hillshade 2")
-                if default_index >= 0:
-                    self.raster_function_combo.setCurrentIndex(default_index)
-                elif self.raster_function_combo.count() > 0:
-                    self.raster_function_combo.setCurrentIndex(0)
+        # Raster function is fixed to "DAR - StdDev - BlueGreen" - no need to update combo box
         
         # Ensure map widget is initialized (this will remove loading label)
         if self.map_widget is None:
@@ -342,12 +381,13 @@ class MainWindow(QMainWindow):
         # Create map widget if it doesn't exist
         if self.map_widget is None:
             try:
-                # Get initial raster function from combo box
-                initial_raster_function = self.raster_function_combo.currentText() if hasattr(self, 'raster_function_combo') else "Shaded Relief - Haxby - MD Hillshade 2"
+                # Use fixed raster function
+                raster_function = "DAR - StdDev - BlueGreen"
                 show_basemap = self.basemap_checkbox.isChecked() if hasattr(self, 'basemap_checkbox') else True
-                initial_opacity = self.opacity_slider.value() / 100.0 if hasattr(self, 'opacity_slider') else 1.0
-                self.log_message(f"Creating MapWidget with extent: {self.service_extent}, raster function: {initial_raster_function}, show_basemap: {show_basemap}")
-                self.map_widget = MapWidget(self.base_url, self.service_extent, raster_function=initial_raster_function, show_basemap=show_basemap)
+                show_hillshade = self.hillshade_checkbox.isChecked() if hasattr(self, 'hillshade_checkbox') else True
+                initial_opacity = self.opacity_slider.value() / 100.0 if hasattr(self, 'opacity_slider') else 0.6
+                self.log_message(f"Creating MapWidget with extent: {self.service_extent}, raster function: {raster_function}, show_basemap: {show_basemap}, show_hillshade: {show_hillshade}")
+                self.map_widget = MapWidget(self.base_url, self.service_extent, raster_function=raster_function, show_basemap=show_basemap, show_hillshade=show_hillshade)
                 self.map_widget.bathymetry_opacity = initial_opacity
                 self.map_widget.selectionChanged.connect(self.on_selection_changed)
                 self.map_widget.selectionCompleted.connect(self.on_selection_completed)
@@ -387,11 +427,7 @@ class MainWindow(QMainWindow):
         if self.map_widget:
             self.map_widget.clear_selection()
             
-    def on_raster_function_changed(self, raster_function):
-        """Handle raster function selection change."""
-        if self.map_widget:
-            self.log_message(f"Changing raster function to: {raster_function}")
-            self.map_widget.set_raster_function(raster_function)
+    # Raster function is fixed to "DAR - StdDev - BlueGreen" - no handler needed
             
     def on_basemap_toggled(self, state):
         """Handle basemap checkbox toggle."""
@@ -405,12 +441,93 @@ class MainWindow(QMainWindow):
                 # Just update display
                 self.map_widget.update()
                 
+    def on_hillshade_toggled(self, state):
+        """Handle hillshade checkbox toggle."""
+        if self.map_widget:
+            show_hillshade = (state == Qt.CheckState.Checked.value or state == 2)
+            self.map_widget.show_hillshade = show_hillshade
+            if show_hillshade:
+                # Reload map to get hillshade layer
+                self.map_widget.load_map()
+            else:
+                # Just update display
+                self.map_widget.update()
+                
     def on_opacity_changed(self, value):
         """Handle opacity slider change."""
         if self.map_widget:
             opacity = value / 100.0  # Convert 0-100 to 0.0-1.0
             self.map_widget.bathymetry_opacity = opacity
             self.map_widget.update()  # Trigger repaint
+            
+    def on_cell_size_changed(self, cell_size_text):
+        """Handle cell size change - update pixel count if selection exists."""
+        # Update pixel count display if there's a current selection
+        if hasattr(self, 'selected_bbox') and self.selected_bbox:
+            xmin, ymin, xmax, ymax = self.selected_bbox
+            self.update_coordinate_display(xmin, ymin, xmax, ymax)
+            
+    def update_coordinate_display(self, xmin, ymin, xmax, ymax):
+        """Update both WebMercator and Geographic coordinate displays."""
+        # Update WebMercator coordinates
+        self.xmin_edit.setText(f"{xmin:.2f}")
+        self.ymin_edit.setText(f"{ymin:.2f}")
+        self.xmax_edit.setText(f"{xmax:.2f}")
+        self.ymax_edit.setText(f"{ymax:.2f}")
+        
+        # Convert to Geographic (WGS84) coordinates
+        try:
+            transformer = pyproj.Transformer.from_crs("EPSG:3857", "EPSG:4326", always_xy=True)
+            west, south = transformer.transform(xmin, ymin)
+            east, north = transformer.transform(xmax, ymax)
+            
+            # Update Geographic coordinates
+            self.west_edit.setText(f"{west:.6f}")
+            self.south_edit.setText(f"{south:.6f}")
+            self.east_edit.setText(f"{east:.6f}")
+            self.north_edit.setText(f"{north:.6f}")
+        except Exception as e:
+            # If conversion fails, clear geographic fields
+            self.west_edit.clear()
+            self.south_edit.clear()
+            self.east_edit.clear()
+            self.north_edit.clear()
+        
+        # Calculate expected number of pixels based on selected cell size
+        try:
+            width_meters = xmax - xmin
+            height_meters = ymax - ymin
+            # Get cell size from dropdown (default to 4 if not available)
+            cell_size = float(self.cell_size_combo.currentText()) if hasattr(self, 'cell_size_combo') else 4.0
+            
+            pixels_width = int(width_meters / cell_size)
+            pixels_height = int(height_meters / cell_size)
+            total_pixels = pixels_width * pixels_height
+            
+            # Check against maximum size (14,000 x 14,000)
+            max_size = 14000
+            exceeds_limit = pixels_width > max_size or pixels_height > max_size
+            
+            # Format with thousand separators
+            pixels_width_str = f"{pixels_width:,}"
+            pixels_height_str = f"{pixels_height:,}"
+            total_pixels_str = f"{total_pixels:,}"
+            
+            if exceeds_limit:
+                # Show warning in red
+                self.pixel_count_label.setText(
+                    f"⚠️ Expected pixels ({cell_size}m): {pixels_width_str} × {pixels_height_str} = {total_pixels_str} "
+                    f"(EXCEEDS MAX: {max_size} × {max_size})"
+                )
+                self.pixel_count_label.setStyleSheet("font-weight: bold; padding: 5px; color: red;")
+            else:
+                self.pixel_count_label.setText(
+                    f"Expected pixels ({cell_size}m): {pixels_width_str} × {pixels_height_str} = {total_pixels_str}"
+                )
+                self.pixel_count_label.setStyleSheet("font-weight: bold; padding: 5px;")
+        except Exception as e:
+            self.pixel_count_label.setText("Expected pixels: --")
+            self.pixel_count_label.setStyleSheet("font-weight: bold; padding: 5px;")
             
     def on_selection_changed(self, xmin, ymin, xmax, ymax):
         """Handle selection change from map (during dragging)."""
@@ -420,13 +537,15 @@ class MainWindow(QMainWindow):
             self.ymin_edit.clear()
             self.xmax_edit.clear()
             self.ymax_edit.clear()
+            self.west_edit.clear()
+            self.south_edit.clear()
+            self.east_edit.clear()
+            self.north_edit.clear()
+            self.pixel_count_label.setText("Expected pixels: --")
             self.download_btn.setEnabled(False)
         else:
             # Show real-time values while selecting
-            self.xmin_edit.setText(f"{xmin:.2f}")
-            self.ymin_edit.setText(f"{ymin:.2f}")
-            self.xmax_edit.setText(f"{xmax:.2f}")
-            self.ymax_edit.setText(f"{ymax:.2f}")
+            self.update_coordinate_display(xmin, ymin, xmax, ymax)
             self.download_btn.setEnabled(True)
             
     def on_selection_completed(self, xmin, ymin, xmax, ymax):
@@ -439,32 +558,33 @@ class MainWindow(QMainWindow):
             self.zoom_to_selection(xmin, ymin, xmax, ymax)
             # Reconnect the signal
             self.map_widget.selectionChanged.connect(self.on_selection_changed)
-            # Set the final bounds in the text fields after zoom
-            self.xmin_edit.setText(f"{xmin:.2f}")
-            self.ymin_edit.setText(f"{ymin:.2f}")
-            self.xmax_edit.setText(f"{xmax:.2f}")
-            self.ymax_edit.setText(f"{ymax:.2f}")
+            # Set the final bounds in the text fields after zoom (both coordinate systems)
+            self.update_coordinate_display(xmin, ymin, xmax, ymax)
             self.download_btn.setEnabled(True)
             
     def zoom_to_selection(self, xmin, ymin, xmax, ymax):
         """Zoom map to the selected area."""
         if self.map_widget:
-            # Store the selected bbox in world coordinates for drawing (before any modifications)
+            # Store the selected bbox in world coordinates for drawing (original selection, no modifications)
+            # This is what will be shown in the purple box and used for download
             self.map_widget.selected_bbox_world = (xmin, ymin, xmax, ymax)
             
-            # Add a 5% padding around the selection
-            width = xmax - xmin
-            height = ymax - ymin
-            padding_x = width * 0.05
-            padding_y = height * 0.05
+            # Calculate the selected area dimensions
+            selection_width = xmax - xmin
+            selection_height = ymax - ymin
             
-            # Calculate new extent with padding, maintaining the selection's aspect ratio
-            new_extent = (
-                xmin - padding_x,
-                ymin - padding_y,
-                xmax + padding_x,
-                ymax + padding_y
-            )
+            # Add 5% padding around the selection
+            padding_x = selection_width * 0.05
+            padding_y = selection_height * 0.05
+            
+            # Start with padded extent
+            padded_xmin = xmin - padding_x
+            padded_ymin = ymin - padding_y
+            padded_xmax = xmax + padding_x
+            padded_ymax = ymax + padding_y
+            
+            padded_width = padded_xmax - padded_xmin
+            padded_height = padded_ymax - padded_ymin
             
             # Get widget aspect ratio
             widget_width = self.map_widget.width()
@@ -472,12 +592,32 @@ class MainWindow(QMainWindow):
             
             if widget_width > 0 and widget_height > 0:
                 widget_aspect = widget_width / widget_height
-                selection_aspect = width / height
+                padded_aspect = padded_width / padded_height
                 
-                # If the selection aspect ratio is very different from widget, 
-                # we might need to adjust, but let's preserve the selection's shape
-                # The service will handle the rendering based on the extent we provide
-                pass  # Keep the extent as-is to preserve selection shape
+                # Calculate center of padded area
+                center_x = (padded_xmin + padded_xmax) / 2
+                center_y = (padded_ymin + padded_ymax) / 2
+                
+                # Adjust extent to match widget aspect ratio while containing the padded selection
+                if padded_aspect > widget_aspect:
+                    # Padded area is wider than widget - use padded width, adjust height
+                    new_width = padded_width
+                    new_height = new_width / widget_aspect
+                else:
+                    # Padded area is taller than widget - use padded height, adjust width
+                    new_height = padded_height
+                    new_width = new_height * widget_aspect
+                
+                # Create new extent centered on the padded selection
+                new_extent = (
+                    center_x - new_width / 2,
+                    center_y - new_height / 2,
+                    center_x + new_width / 2,
+                    center_y + new_height / 2
+                )
+            else:
+                # Fallback to padded extent if widget size not available
+                new_extent = (padded_xmin, padded_ymin, padded_xmax, padded_ymax)
             
             self.map_widget.extent = new_extent
             # Don't clear selection - keep it visible
@@ -535,6 +675,30 @@ class MainWindow(QMainWindow):
             return
             
         output_crs = self.crs_combo.currentText()
+        cell_size = float(self.cell_size_combo.currentText())  # Get cell size in meters
+        
+        # Check if selection exceeds maximum size (14,000 x 14,000 pixels)
+        xmin, ymin, xmax, ymax = bbox
+        width_meters = xmax - xmin
+        height_meters = ymax - ymin
+        pixels_width = int(width_meters / cell_size)
+        pixels_height = int(height_meters / cell_size)
+        max_size = 14000
+        
+        if pixels_width > max_size or pixels_height > max_size:
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Icon.Warning)
+            msg.setWindowTitle("Selection Too Large")
+            msg.setText(
+                f"Selected area exceeds maximum download size ({max_size:,} × {max_size:,} pixels).\n\n"
+                f"Requested size: {pixels_width:,} × {pixels_height:,} pixels.\n\n"
+                f"Please either:\n"
+                f"1. Select a smaller area, or\n"
+                f"2. Increase the cell size (currently {cell_size}m)"
+            )
+            msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+            msg.exec()
+            return
         
         # Disable download button
         self.download_btn.setEnabled(False)
@@ -546,7 +710,9 @@ class MainWindow(QMainWindow):
             self.base_url,
             bbox,
             output_path,
-            output_crs
+            output_crs,
+            pixel_size=cell_size,
+            max_size=max_size
         )
         self.downloader.progress.connect(self.progress_bar.setValue)
         self.downloader.status.connect(self.on_status_update)
