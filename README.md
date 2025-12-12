@@ -1,67 +1,140 @@
 # CCOM Bathymetry Downloader
 
-A PyQt6 application for downloading bathymetry data from the CCOM ArcGIS ImageServer and exporting it as GeoTIFF files.
+A PyQt6-based desktop application for downloading bathymetry data from ArcGIS ImageServer REST endpoints and exporting it as GeoTIFF files with interactive area selection.
 
 ## Features
 
-- Interactive map display with Haxby-styled bathymetry visualization
-- Area selection tool for choosing download regions (click and drag)
-- Pan and zoom navigation (Ctrl+Click to pan, mouse wheel to zoom)
-- Download selected areas as GeoTIFF files with raw bathymetry values
-- Coordinate system conversion support (EPSG:3857, EPSG:4326)
-- Progress tracking and status updates
-- Real-time coordinate display
+- **Interactive Map Display**: Visualize bathymetry data with an interactive map widget
+- **Area Selection**: Click and drag to select areas of interest for download
+- **Multiple Layer Support**:
+  - World Imagery basemap (optional)
+  - Bathymetry hillshade underlay layer
+  - Main bathymetry layer with adjustable opacity
+  - Overlay blend mode for enhanced visualization
+- **Raster Function**: Uses "DAR - StdDev - BlueGreen" for consistent visualization
+- **Cell Size Selection**: Choose from 4m, 8m, or 16m pixel resolution
+- **Coordinate Systems**: Support for EPSG:3857 (Web Mercator) and EPSG:4326 (WGS84)
+- **Coordinate Display**: Real-time display of selected area in both Web Mercator and Geographic (WGS84) coordinates
+- **Pixel Count Display**: Shows expected pixel dimensions based on selected area and cell size
+- **Maximum Size Validation**: Prevents downloads exceeding 14,000 × 14,000 pixels
+- **Automatic Filename Generation**: Default filename includes cell size and timestamp
+- **Mouse Controls**:
+  - Mouse wheel: Zoom in/out (centered on window)
+  - Middle-click drag: Pan the map
+  - Left-click drag: Select area for download
+
+## Requirements
+
+- Python 3.8 or higher
+- PyQt6 >= 6.6.0
+- requests >= 2.31.0
+- rasterio >= 1.3.9
+- numpy >= 1.24.0
+- Pillow >= 10.0.0
+- pyproj >= 3.6.0
 
 ## Installation
 
+1. Clone the repository:
+```bash
+git clone https://github.com/seamapper/CCOM_Downloader.git
+cd CCOM_Downloader
+```
+
+2. Create a virtual environment (recommended):
+```bash
+python -m venv venv
+```
+
+3. Activate the virtual environment:
+   - On Windows:
+     ```bash
+     venv\Scripts\activate
+     ```
+   - On Linux/Mac:
+     ```bash
+     source venv/bin/activate
+     ```
+
+4. Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
 ## Usage
 
+### Running from Source
+
 ```bash
 python main.py
 ```
 
-### How to Use
+### Running the Executable
 
-1. **Navigate the Map**:
-   - Use mouse wheel to zoom in/out
-   - Hold Ctrl and click-drag to pan the map
-   - Click "Fit to Extent" to view the full service area
+A pre-built Windows executable is available in the `dist/` directory:
+- `CCOM Bathymetry Downloader V2025.1.exe`
 
-2. **Select an Area**:
-   - Click and drag on the map to draw a selection rectangle
-   - The selected coordinates will appear in the "Selected Area" panel
-   - Click "Clear Selection" to remove the selection
+Simply double-click the executable to run the application.
 
-3. **Configure Output**:
-   - Choose output coordinate system (EPSG:3857 or EPSG:4326)
-   - Click "Browse..." to select output file path
+### Using the Application
 
-4. **Download**:
-   - Click "Download Selected Area" to start the download
-   - Monitor progress in the progress bar and status log
-   - The GeoTIFF file will be saved when complete
-
-## Requirements
-
-- Python 3.8+
-- See requirements.txt for package dependencies
+1. **Select an Area**: Click and drag on the map to select the area you want to download
+2. **Adjust Settings**:
+   - Choose cell size (4m, 8m, or 16m)
+   - Select output coordinate system (EPSG:3857 or EPSG:4326)
+   - Toggle basemap visibility
+   - Toggle hillshade layer
+   - Adjust opacity of the main bathymetry layer
+   - Enable/disable overlay blend mode
+3. **Download**: Click "Download Selected Area" button
+4. **Save File**: Choose a save location in the file dialog (default filename includes cell size and timestamp)
 
 ## Data Source
 
-This application downloads bathymetry data from:
-- **Service**: CCOM WGOM-LI-SNE Bathymetry (4m resolution)
-- **REST Endpoint**: https://gis.ccom.unh.edu/server/rest/services/WGOM-LI-SNE/WGOM_LI_SNE_BTY_4m_20231005_IS/ImageServer
-- **Map Visualization**: Uses "Haxby Percent Clip DRA" raster function for display
-- **Download Format**: Raw F32 bathymetry values exported as GeoTIFF
+The application connects to the CCOM ArcGIS ImageServer:
+- **Service URL**: `https://gis.ccom.unh.edu/server/rest/services/WGOM_LI_SNE/WGOM_LI_SNE_BTY_4m_20231005_WMAS_IS/ImageServer`
+- **Raster Function**: DAR - StdDev - BlueGreen
+- **Hillshade Function**: Multidirectional Hillshade 3x
 
-## Notes
+## Output Format
 
-- The map displays styled bathymetry (Haxby colormap) for visualization
-- Downloaded GeoTIFF files contain raw bathymetry values (F32 format)
-- Large area downloads may take several minutes depending on size
-- Maximum download size is limited by the service (15000x15000 pixels)
+Downloads are saved as GeoTIFF files with:
+- Proper georeferencing
+- NoData value handling
+- Coordinate system information embedded
+- LZW compression
 
+## Building the Executable
+
+To build the executable yourself:
+
+```bash
+pip install pyinstaller
+pyinstaller --onefile --noconsole --icon=media\CCOM.ico --name="CCOM Bathymetry Downloader V2025.1" main.py
+```
+
+The executable will be created in the `dist/` directory.
+
+## License
+
+This project is licensed under the BSD 3-Clause License - see the [LICENSE](LICENSE) file for details.
+
+## Author
+
+**Paul Johnson**  
+Center for Coastal and Ocean Mapping  
+University of New Hampshire  
+Email: pjohnson@ccom.unh.edu
+
+## Version
+
+Current version: **2025.1**
+
+## Acknowledgments
+
+- Center for Coastal and Ocean Mapping (CCOM), University of New Hampshire
+- Built with PyQt6, rasterio, and other open-source libraries
+
+## Support
+
+For issues, questions, or contributions, please open an issue on the [GitHub repository](https://github.com/seamapper/CCOM_Downloader/issues).
