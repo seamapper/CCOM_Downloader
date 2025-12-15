@@ -1096,58 +1096,30 @@ class MainWindow(QMainWindow):
     def _refresh_map_on_resize(self):
         """Refresh map display after window resize."""
         if self.map_widget and self.map_widget.map_loaded:
-            # CRITICAL: Preserve both the extent AND the selected bbox when resizing
-            # The selected_bbox_world stores the world coordinates of the selection
-            # and should NEVER change - it's only set when a new selection is made
-            # The extent determines what area of the map is visible and should be preserved during resize
+            # Ensure widget size is updated before calculating new extent
+            # Process events to ensure Qt has updated the widget size
+            QApplication.processEvents()
             
-            # DEBUG: Log before resize
-            print(f"[DEBUG _refresh_map_on_resize] BEFORE RESIZE:")
-            print(f"  Widget size: {self.map_widget.width()}x{self.map_widget.height()}")
-            print(f"  Extent: {self.map_widget.extent}")
-            print(f"  Selected bbox_world: {self.map_widget.selected_bbox_world}")
-            if hasattr(self.map_widget, '_scaled_pixmap_size') and self.map_widget._scaled_pixmap_size:
-                print(f"  Scaled pixmap size: {self.map_widget._scaled_pixmap_size}")
-            if not self.map_widget.current_pixmap.isNull():
-                print(f"  Current pixmap size: {self.map_widget.current_pixmap.width()}x{self.map_widget.current_pixmap.height()}")
+            # Verify widget size is valid before proceeding
+            widget_width = self.map_widget.width()
+            widget_height = self.map_widget.height()
             
-            # Lock the extent to prevent any changes during resize
-            preserved_extent = self.map_widget.extent
-            preserved_selection = self.map_widget.selected_bbox_world
+            if widget_width <= 0 or widget_height <= 0:
+                # Widget not sized yet, skip this resize
+                return
             
-            # Set the requested extent and lock it
-            self.map_widget._requested_extent = preserved_extent
-            self.map_widget._extent_locked = True
-            
-            # Reload the map (it will preserve extent via _requested_extent and _extent_locked)
-            self.map_widget.load_map()
-            
-            # CRITICAL: Force extent to be preserved after load_map completes
-            # We need to do this after the map loads because load_map is asynchronous
-            def ensure_extent_preserved():
-                print(f"[DEBUG _refresh_map_on_resize] AFTER RESIZE (in callback):")
-                print(f"  Widget size: {self.map_widget.width()}x{self.map_widget.height()}")
-                print(f"  Extent: {self.map_widget.extent}")
-                print(f"  Selected bbox_world: {self.map_widget.selected_bbox_world}")
-                if hasattr(self.map_widget, '_scaled_pixmap_size') and self.map_widget._scaled_pixmap_size:
-                    print(f"  Scaled pixmap size: {self.map_widget._scaled_pixmap_size}")
-                if not self.map_widget.current_pixmap.isNull():
-                    print(f"  Current pixmap size: {self.map_widget.current_pixmap.width()}x{self.map_widget.current_pixmap.height()}")
-                
-                if preserved_extent:
-                    self.map_widget.extent = preserved_extent
-                    self.map_widget._requested_extent = preserved_extent
-                    print(f"  Restored extent to: {preserved_extent}")
-                if preserved_selection:
-                    self.map_widget.selected_bbox_world = preserved_selection
-                    print(f"  Restored selected_bbox_world to: {preserved_selection}")
-                # Unlock extent after ensuring it's preserved
-                self.map_widget._extent_locked = False
-                # Force a repaint to update the selection box
-                self.map_widget.update()
-            
-            # Wait for map to load, then ensure extent is preserved
-            QTimer.singleShot(1000, ensure_extent_preserved)
+            # If there's a selected area, zoom to it to maintain constant visual size
+            # This treats the resize as if the user made a new selection with the same bounds
+            # The zoom_to_selection function will recalculate the extent based on the new widget size
+            # making the selection box appear the same visual size
+            if self.map_widget.selected_bbox_world:
+                xmin, ymin, xmax, ymax = self.map_widget.selected_bbox_world
+                # Zoom to the selection - this will recalculate the extent based on new widget size
+                # making the selection box appear the same visual size
+                self.zoom_to_selection(xmin, ymin, xmax, ymax)
+            else:
+                # No selection - just reload the map with current extent
+                self.map_widget.load_map()
     
     def closeEvent(self, event):
         """Handle window close event."""

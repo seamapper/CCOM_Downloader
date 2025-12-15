@@ -459,8 +459,13 @@ class MapWidget(QWidget):
                 self.extent = (xmin, ymin, xmax, ymax)
             print(f"Setting current_pixmap, isNull: {self.current_pixmap.isNull()}, size: {self.current_pixmap.width()}x{self.current_pixmap.height()}")
             print(f"Calling update() to repaint widget")
+            
+            # CRITICAL: Force immediate repaint to ensure selection box is redrawn with new pixmap size
+            # This is especially important during window resize when pixmap size changes
+            # The selection box will be recalculated in paintEvent using the new pixmap size
             self.update()  # Trigger repaint
             self.repaint()  # Force immediate repaint
+            
             print(f"Map tile loaded successfully: {pixmap.width()}x{pixmap.height()}")
             
             # Emit signal on first successful load
@@ -564,6 +569,10 @@ class MapWidget(QWidget):
     def world_bbox_to_screen_rect(self, bbox_world):
         """Convert world bbox to screen rectangle for drawing."""
         if bbox_world is None:
+            return None
+        
+        # CRITICAL: Ensure pixmap is valid before converting
+        if self.current_pixmap.isNull() or not self.map_loaded:
             return None
             
         xmin, ymin, xmax, ymax = bbox_world
@@ -733,13 +742,9 @@ class MapWidget(QWidget):
     def resizeEvent(self, event):
         """Handle widget resize."""
         super().resizeEvent(event)
-        if not self.current_pixmap.isNull():
-            self.current_pixmap = self.current_pixmap.scaled(
-                self.size(),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation
-            )
-            self.update()
+        # Don't scale pixmap here - let the map loading handle it properly
+        # Scaling here interferes with coordinate conversion and causes selection box size issues
+        # The map will be reloaded by _refresh_map_on_resize in main.py
             
     def paintEvent(self, event):
         """Paint the map and selection rectangle."""
@@ -804,7 +809,8 @@ class MapWidget(QWidget):
             
         # Draw selection rectangle (always on top)
         # First draw the persistent selected bbox if it exists
-        if self.selected_bbox_world:
+        # CRITICAL: Only draw if pixmap is loaded and valid to avoid drawing with stale data during resize
+        if self.selected_bbox_world and self.map_loaded and not self.current_pixmap.isNull():
             bbox_screen = self.world_bbox_to_screen_rect(self.selected_bbox_world)
             if bbox_screen:
                 # Use red if selection is too large, green if valid
