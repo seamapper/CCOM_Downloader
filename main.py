@@ -447,8 +447,6 @@ class MainWindow(QMainWindow):
         
         # Update map extent (but don't reload if map widget already exists and is loading)
         if self.map_widget:
-            self.log_message(f"Updating map extent: {self.service_extent}")
-            self.map_widget.extent = self.service_extent
             self.map_widget.base_url = self.base_url
             
             # Update raster functions from current data source
@@ -456,6 +454,13 @@ class MainWindow(QMainWindow):
             new_hillshade_raster_function = self.data_sources[self.current_data_source]["hillshade_raster_function"]
             self.map_widget.raster_function = new_raster_function
             self.map_widget.hillshade_raster_function = new_hillshade_raster_function
+            
+            # Always set extent to service extent as a baseline
+            # If there's a pending selection, zoom_to_selection will override it
+            self.log_message(f"Updating map extent: {self.service_extent}")
+            self.map_widget.extent = self.service_extent
+            if hasattr(self, '_pending_selection') and self._pending_selection:
+                self.log_message(f"Preserving selection, will zoom to it after map loads")
             
             # Only reload if map hasn't been loaded yet and isn't currently loading
             if not self.map_widget.map_loaded and not getattr(self.map_widget, '_loading', False):
@@ -1219,20 +1224,47 @@ class MainWindow(QMainWindow):
         for line in instructions:
             self.log_message(line)
     
+    def _bboxes_overlap(self, bbox1, bbox2):
+        """Check if two bounding boxes overlap.
+        
+        Args:
+            bbox1: (xmin, ymin, xmax, ymax) tuple
+            bbox2: (xmin, ymin, xmax, ymax) tuple
+            
+        Returns:
+            True if boxes overlap, False otherwise
+        """
+        xmin1, ymin1, xmax1, ymax1 = bbox1
+        xmin2, ymin2, xmax2, ymax2 = bbox2
+        
+        # Check if boxes overlap (not disjoint)
+        return not (xmax1 < xmin2 or xmin1 > xmax2 or ymax1 < ymin2 or ymin1 > ymax2)
+    
     def on_data_source_changed(self, data_source_name):
         """Handle data source selection change."""
         if data_source_name not in self.data_sources:
             return
         
-        # Store current selection if it exists
+        # Get new data source extent
+        new_service_extent = self.data_sources[data_source_name]["default_extent"]
+        
+        # Check if current selection overlaps with new data source extent
         saved_selection = None
         if hasattr(self, 'selected_bbox') and self.selected_bbox:
-            saved_selection = self.selected_bbox
+            if self._bboxes_overlap(self.selected_bbox, new_service_extent):
+                # Selection overlaps with new data source - keep it
+                saved_selection = self.selected_bbox
+            else:
+                # Selection doesn't overlap - clear it
+                self.selected_bbox = None
+                if self.map_widget:
+                    self.map_widget.selected_bbox_world = None
+                    self.map_widget.clear_selection()
         
         # Update current data source
         self.current_data_source = data_source_name
         self.base_url = self.data_sources[data_source_name]["url"]
-        self.service_extent = self.data_sources[data_source_name]["default_extent"]
+        self.service_extent = new_service_extent
         
         # Update map widget settings if it exists
         if self.map_widget:
@@ -1246,28 +1278,33 @@ class MainWindow(QMainWindow):
         # Reload service info (this will update extent and reload map)
         self.load_service_info()
         
-        # Store selection to restore after map loads
+        # Store selection to restore after map loads (will zoom to it if it overlaps)
         self._pending_selection = saved_selection
     
     def _reload_map_with_selection(self):
         """Reload map and restore selection if it exists."""
-        # Reload the map
+        # If there's a pending selection, let zoom_to_selection handle loading the map
+        # Otherwise, load the map with current extent
         if self.map_widget:
-            self.map_widget.load_map()
-            
-            # Restore selection if it was saved
             if hasattr(self, '_pending_selection') and self._pending_selection:
-                # Wait a bit for map to load, then restore selection
-                QTimer.singleShot(1000, lambda: self._restore_selection())
+                # Wait a moment for map widget to be ready, then restore selection
+                # zoom_to_selection will load the map with the correct extent
+                QTimer.singleShot(100, lambda: self._restore_selection())
+            else:
+                # No selection - just reload the map with current extent
+                self.map_widget.load_map()
     
     def _restore_selection(self):
-        """Restore a previously saved selection."""
+        """Restore a previously saved selection and zoom to it."""
         if hasattr(self, '_pending_selection') and self._pending_selection:
             bbox = self._pending_selection
             self.selected_bbox = bbox
             
-            # Update coordinate displays
-            self.update_coordinate_display(bbox[0], bbox[1], bbox[2], bbox[3], update_map=True)
+            # Zoom to the selection to maintain visual size
+            self.zoom_to_selection(bbox[0], bbox[1], bbox[2], bbox[3])
+            
+            # Update coordinate displays (without updating map since zoom_to_selection already does)
+            self.update_coordinate_display(bbox[0], bbox[1], bbox[2], bbox[3], update_map=False)
             
             # Clear pending selection
             self._pending_selection = None
