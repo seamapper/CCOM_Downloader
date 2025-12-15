@@ -176,12 +176,12 @@ class MainWindow(QMainWindow):
         
         # Basemap controls
         basemap_controls = QHBoxLayout()
-        self.basemap_checkbox = QCheckBox("Show World Imagery Basemap")
+        self.basemap_checkbox = QCheckBox("Imagery Basemap")
         self.basemap_checkbox.setChecked(True)
         self.basemap_checkbox.stateChanged.connect(self.on_basemap_toggled)
         basemap_controls.addWidget(self.basemap_checkbox)
         
-        self.hillshade_checkbox = QCheckBox("Show Bathymetry Hillshade")
+        self.hillshade_checkbox = QCheckBox("Hillshade")
         self.hillshade_checkbox.setChecked(True)  # On by default
         self.hillshade_checkbox.stateChanged.connect(self.on_hillshade_toggled)
         basemap_controls.addWidget(self.hillshade_checkbox)
@@ -451,6 +451,10 @@ class MainWindow(QMainWindow):
             extent_dict["ymax"]
         )
         self.log_message("Service info loaded successfully")
+        self.log_message(f"REST endpoint extent (bathymetry data bounds): {self.service_extent}")
+        
+        # Don't set default bounds here - wait until map loads so extent is correct
+        # Default bounds will be set in on_map_first_loaded after map loads with correct extent
         
         # Update cell size dropdown based on pixel size from service
         pixel_size_x = service_data.get("pixel_size_x")
@@ -481,20 +485,74 @@ class MainWindow(QMainWindow):
             self.map_widget.raster_function = new_raster_function
             self.map_widget.hillshade_raster_function = new_hillshade_raster_function
             
-            # Always set extent to service extent as a baseline
+            # Always set extent to REST endpoint service extent as a baseline
+            # This ensures the map shows exactly the bathymetry data bounds from the REST endpoint
             # If there's a pending selection, zoom_to_selection will override it
-            self.log_message(f"Updating map extent: {self.service_extent}")
+            self.log_message(f"Updating map extent to REST endpoint extent: {self.service_extent}")
             self.map_widget.extent = self.service_extent
+            # Also update _requested_extent to ensure coordinate conversion is correct
+            # This ensures the map displays exactly the REST endpoint bounds, not a rounded or adjusted version
+            self.map_widget._requested_extent = self.service_extent
+            # Update service extent in map widget so it can distinguish dataset bounds from user selection
+            self.map_widget.service_extent = self.service_extent
+            # CRITICAL: Always update selected_bbox_world to REST endpoint extent if it matches default extent
+            # This ensures the box shows the exact REST endpoint bounds, not the default extent
+            # Check if selected_bbox_world is None OR if it matches the default extent (needs update)
+            default_extent = self.data_sources[self.current_data_source]["default_extent"]
+            needs_update = (
+                self.map_widget.selected_bbox_world is None or
+                self.map_widget.selected_bbox_world == default_extent
+            )
+            if needs_update:
+                self.log_message(f"Updating selected_bbox_world from {self.map_widget.selected_bbox_world} to REST endpoint extent {self.service_extent}")
+                self.map_widget.selected_bbox_world = self.service_extent
+                self.map_widget.set_selection_validity(True)
+                self.selected_bbox = self.service_extent
+                # Update coordinate display to show REST endpoint bounds
+                self.update_coordinate_display(*self.service_extent, update_map=False)
             if hasattr(self, '_pending_selection') and self._pending_selection:
                 self.log_message(f"Preserving selection, will zoom to it after map loads")
             
-            # Only reload if map hasn't been loaded yet and isn't currently loading
-            if not self.map_widget.map_loaded and not getattr(self.map_widget, '_loading', False):
-                self.map_widget.map_loaded = False  # Reset flag to allow reload
-                QTimer.singleShot(300, lambda: self._reload_map_with_selection())
+            # CRITICAL: Always reload map with REST endpoint extent to ensure it shows exact bathymetry data bounds
+            # Check if the map was loaded with a different extent (e.g., default extent)
+            current_extent = self.map_widget.extent
+            default_extent = self.data_sources[self.current_data_source]["default_extent"]
+            
+            # Check if map was loaded with default extent (needs reload with REST endpoint extent)
+            extent_matches_default = (
+                abs(current_extent[0] - default_extent[0]) < 0.1 and
+                abs(current_extent[1] - default_extent[1]) < 0.1 and
+                abs(current_extent[2] - default_extent[2]) < 0.1 and
+                abs(current_extent[3] - default_extent[3]) < 0.1
+            )
+            
+            # Ensure default bounds are set
+            if self.map_widget.selected_bbox_world is None:
+                self.map_widget.selected_bbox_world = self.service_extent
+                self.map_widget.set_selection_validity(True)
+                self.selected_bbox = self.service_extent
+                self.map_widget.service_extent = self.service_extent
+                self.log_message(f"Set default bounds to REST endpoint extent: {self.service_extent}")
+            
+            if current_extent != self.service_extent or extent_matches_default:
+                self.log_message(f"Map extent ({current_extent}) differs from REST endpoint extent ({self.service_extent}), zooming to REST endpoint bounds...")
+                if not getattr(self.map_widget, '_loading', False):
+                    # CRITICAL: Use zoom_to_selection directly (like when user hits return)
+                    # This recalculates the extent with padding and positions the box correctly
+                    # Don't reload first - zoom_to_selection will reload with the correct extent
+                    # Wait a bit longer to ensure widget is fully sized
+                    QTimer.singleShot(300, lambda: self.zoom_to_selection(*self.service_extent))
+            elif not self.map_widget.map_loaded and not getattr(self.map_widget, '_loading', False):
+                self.log_message("Map not loaded yet, will load and zoom to REST endpoint extent...")
+                # Map hasn't loaded yet - use zoom_to_selection which will load the map with correct extent
+                # zoom_to_selection will:
+                # 1. Calculate extent with padding
+                # 2. Set map widget extent
+                # 3. Call load_map() to reload basemap and raster layers
+                # Wait a bit longer to ensure widget is fully sized
+                QTimer.singleShot(300, lambda: self.zoom_to_selection(*self.service_extent))
             else:
-                # Map already loaded, just reload it
-                QTimer.singleShot(300, lambda: self._reload_map_with_selection())
+                self.log_message("Map already loaded with REST endpoint extent")
         else:
             self.log_message("ERROR: Map widget is None after initialization attempt")
             
@@ -580,6 +638,8 @@ class MainWindow(QMainWindow):
                 self.log_message(f"Creating MapWidget with extent: {self.service_extent}, raster function: {raster_function}, show_basemap: {show_basemap}, show_hillshade: {show_hillshade}, use_blend: {use_blend}")
                 self.map_widget = MapWidget(self.base_url, self.service_extent, raster_function=raster_function, show_basemap=show_basemap, show_hillshade=show_hillshade, use_blend=use_blend, hillshade_raster_function=hillshade_raster_function)
                 self.map_widget.bathymetry_opacity = initial_opacity
+                # Store service extent in map widget so it can distinguish dataset bounds from user selection
+                self.map_widget.service_extent = self.service_extent
                 self.map_widget.selectionChanged.connect(self.on_selection_changed)
                 self.map_widget.selectionCompleted.connect(self.on_selection_completed)
                 self.map_widget.mapFirstLoaded.connect(self.on_map_first_loaded)
@@ -589,6 +649,9 @@ class MainWindow(QMainWindow):
                 self.map_group.update()
                 layout.update()
                 self.log_message("MapWidget created and added to layout successfully")
+                
+                # Don't set default bounds here - wait until map loads so extent is correct
+                # Default bounds will be set in on_map_first_loaded after map loads
                 
                 # Trigger map load after a short delay to ensure widget is sized
                 self.log_message("Scheduling map load in 200ms...")
@@ -601,9 +664,15 @@ class MainWindow(QMainWindow):
                 
     def trigger_map_load(self):
         """Trigger map load - called via timer."""
+        # Don't load here - let on_service_info_loaded handle it
+        # This ensures REST endpoint extent is available and widget is properly sized
         if self.map_widget:
-            self.log_message(f"Triggering map load, widget size: {self.map_widget.width()}x{self.map_widget.height()}")
-            self.map_widget.load_map()
+            if self.service_extent:
+                self.log_message(f"Widget ready, waiting for service info to trigger map load...")
+                self.log_message(f"Widget size: {self.map_widget.width()}x{self.map_widget.height()}")
+                self.log_message(f"REST endpoint extent: {self.service_extent}")
+            else:
+                self.log_message("REST endpoint extent not available yet, waiting for service info to load...")
         else:
             self.log_message("ERROR: map_widget is None when trying to trigger load")
             
@@ -684,20 +753,17 @@ class MainWindow(QMainWindow):
             height_meters = ymax - ymin
             pixels_width = int(width_meters / cell_size)
             pixels_height = int(height_meters / cell_size)
-            max_size = 14000
             
-            is_valid = not (pixels_width > max_size or pixels_height > max_size)
+            # No size limit - always enable download button
+            # Warning dialog will be shown when downloading large datasets
+            is_valid = True
             
-            # Update map widget selection color
+            # Update map widget selection color (always valid now)
             if self.map_widget:
                 self.map_widget.set_selection_validity(is_valid)
             
-            if is_valid:
-                # Valid selection - enable button
-                self.download_btn.setEnabled(True)
-            else:
-                # Selection too large - disable button
-                self.download_btn.setEnabled(False)
+            # Always enable download button (size limit removed with tiling support)
+            self.download_btn.setEnabled(True)
         except Exception:
             # Error calculating - disable button to be safe
             self.download_btn.setEnabled(False)
@@ -739,7 +805,8 @@ class MainWindow(QMainWindow):
         
         # Update pixel count if selection exists
         if hasattr(self, 'selected_bbox') and self.selected_bbox:
-            self.update_pixel_count_display()
+            xmin, ymin, xmax, ymax = self.selected_bbox
+            self.update_coordinate_display(xmin, ymin, xmax, ymax, update_map=False)
     
     def on_cell_size_changed(self, cell_size_text):
         """Handle cell size change - update pixel count if selection exists."""
@@ -881,22 +948,22 @@ class MainWindow(QMainWindow):
             pixels_height = int(height_meters / cell_size)
             total_pixels = pixels_width * pixels_height
             
-            # Check against maximum size (14,000 x 14,000)
-            max_size = 14000
-            exceeds_limit = pixels_width > max_size or pixels_height > max_size
-            
             # Format with thousand separators
             pixels_width_str = f"{pixels_width:,}"
             pixels_height_str = f"{pixels_height:,}"
             total_pixels_str = f"{total_pixels:,}"
             
-            if exceeds_limit:
-                # Show warning in red
+            # Show warning for large datasets (> 10,000 pixels in a dimension)
+            large_size_threshold = 10000
+            is_large = pixels_width > large_size_threshold or pixels_height > large_size_threshold
+            
+            if is_large:
+                # Show warning in orange/yellow for large datasets
                 self.pixel_count_label.setText(
                     f"⚠️ Expected pixels ({cell_size}m): {pixels_width_str} × {pixels_height_str} = {total_pixels_str} "
-                    f"(EXCEEDS MAX: {max_size} × {max_size})"
+                    f"(LARGE DATASET)"
                 )
-                self.pixel_count_label.setStyleSheet("font-weight: bold; padding: 5px; color: red;")
+                self.pixel_count_label.setStyleSheet("font-weight: bold; padding: 5px; color: orange;")
             else:
                 self.pixel_count_label.setText(
                     f"Expected pixels ({cell_size}m): {pixels_width_str} × {pixels_height_str} = {total_pixels_str}"
@@ -943,9 +1010,15 @@ class MainWindow(QMainWindow):
     def zoom_to_selection(self, xmin, ymin, xmax, ymax):
         """Zoom map to the selected area."""
         if self.map_widget:
-            # Store the selected bbox in world coordinates for drawing (original selection, no modifications)
-            # This is what will be shown in the purple box and used for download
-            self.map_widget.selected_bbox_world = (xmin, ymin, xmax, ymax)
+            # Get widget aspect ratio - ensure widget is properly sized
+            widget_width = self.map_widget.width()
+            widget_height = self.map_widget.height()
+            
+            # If widget isn't sized yet, wait a bit and try again
+            if widget_width <= 0 or widget_height <= 0:
+                self.log_message(f"Widget not sized yet ({widget_width}x{widget_height}), retrying zoom_to_selection in 200ms...")
+                QTimer.singleShot(200, lambda: self.zoom_to_selection(xmin, ymin, xmax, ymax))
+                return
             
             # Calculate the selected area dimensions
             selection_width = xmax - xmin
@@ -963,10 +1036,6 @@ class MainWindow(QMainWindow):
             
             padded_width = padded_xmax - padded_xmin
             padded_height = padded_ymax - padded_ymin
-            
-            # Get widget aspect ratio
-            widget_width = self.map_widget.width()
-            widget_height = self.map_widget.height()
             
             if widget_width > 0 and widget_height > 0:
                 widget_aspect = widget_width / widget_height
@@ -997,7 +1066,16 @@ class MainWindow(QMainWindow):
                 # Fallback to padded extent if widget size not available
                 new_extent = (padded_xmin, padded_ymin, padded_xmax, padded_ymax)
             
+            # Set the extent FIRST, then store the selection bbox
+            # This ensures the selection bbox is stored with the correct extent context
             self.map_widget.extent = new_extent
+            self.map_widget._requested_extent = new_extent  # Also update _requested_extent for accurate coordinate conversion
+            # Store the selected bbox in world coordinates for drawing (original selection, no modifications)
+            # This is what will be shown in the yellow/green box and used for download
+            self.map_widget.selected_bbox_world = (xmin, ymin, xmax, ymax)
+            # Ensure service_extent is preserved for color distinction (yellow for dataset bounds, green for user selection)
+            if not hasattr(self.map_widget, 'service_extent') or self.map_widget.service_extent is None:
+                self.map_widget.service_extent = self.service_extent
             # Don't clear selection - keep it visible
             self.map_widget.load_map()
             
@@ -1039,28 +1117,34 @@ class MainWindow(QMainWindow):
         output_crs = self.crs_combo.currentText()
         cell_size = float(self.cell_size_combo.currentText())  # Get cell size in meters
         
-        # Check if selection exceeds maximum size (14,000 x 14,000 pixels)
+        # Calculate pixel dimensions
         xmin, ymin, xmax, ymax = bbox
         width_meters = xmax - xmin
         height_meters = ymax - ymin
         pixels_width = int(width_meters / cell_size)
         pixels_height = int(height_meters / cell_size)
-        max_size = 14000
         
-        if pixels_width > max_size or pixels_height > max_size:
+        # Warn user if downloading a very large dataset (> 10,000 x 10,000 pixels)
+        large_size_threshold = 10000
+        if pixels_width > large_size_threshold or pixels_height > large_size_threshold:
+            total_pixels = pixels_width * pixels_height
             msg = QMessageBox(self)
             msg.setIcon(QMessageBox.Icon.Warning)
-            msg.setWindowTitle("Selection Too Large")
+            msg.setWindowTitle("Large Dataset Warning")
             msg.setText(
-                f"Selected area exceeds maximum download size ({max_size:,} × {max_size:,} pixels).\n\n"
-                f"Requested size: {pixels_width:,} × {pixels_height:,} pixels.\n\n"
-                f"Please either:\n"
-                f"1. Select a smaller area, or\n"
-                f"2. Increase the cell size (currently {cell_size}m)"
+                f"You are about to download a very large dataset.\n\n"
+                f"Requested size: {pixels_width:,} × {pixels_height:,} pixels\n"
+                f"Total pixels: {total_pixels:,}\n\n"
+                f"This download may take a significant amount of time and disk space.\n"
+                f"{'Tiled download is enabled and will break this into multiple requests.' if self.tile_download_checkbox.isChecked() else 'Consider enabling Tile Download for better reliability.'}\n\n"
+                f"Do you want to continue?"
             )
-            msg.setStandardButtons(QMessageBox.StandardButton.Ok)
-            msg.exec()
-            return
+            msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel)
+            msg.setDefaultButton(QMessageBox.StandardButton.Cancel)
+            result = msg.exec()
+            
+            if result == QMessageBox.StandardButton.Cancel:
+                return  # User cancelled
         
         # Generate default filename: "CCOM_Bathy_" + cell_size + "_" + date_time + ".tif"
         current_time = datetime.now()
@@ -1094,6 +1178,8 @@ class MainWindow(QMainWindow):
         use_tile_download = self.tile_download_checkbox.isChecked()
         
         # Create downloader thread
+        # max_size is still used when tiling is disabled
+        max_size = 14000  # Maximum size for non-tiled downloads
         self.downloader = BathymetryDownloader(
             self.base_url,
             bbox,
@@ -1262,7 +1348,88 @@ class MainWindow(QMainWindow):
             self.save_config()  # Save to config file
     
     def on_map_first_loaded(self):
-        """Handle first successful map load - show instructions."""
+        """Handle first successful map load - show instructions and set default bounds."""
+        # DEBUG: Log current state
+        self.log_message("=" * 60)
+        self.log_message("DEBUG: on_map_first_loaded called")
+        self.log_message(f"DEBUG: map_widget exists: {self.map_widget is not None}")
+        if self.map_widget:
+            self.log_message(f"DEBUG: selected_bbox_world: {self.map_widget.selected_bbox_world}")
+            self.log_message(f"DEBUG: map_loaded: {self.map_widget.map_loaded}")
+            self.log_message(f"DEBUG: current_pixmap.isNull: {self.map_widget.current_pixmap.isNull()}")
+            self.log_message(f"DEBUG: extent: {self.map_widget.extent}")
+            self.log_message(f"DEBUG: _requested_extent: {getattr(self.map_widget, '_requested_extent', None)}")
+            self.log_message(f"DEBUG: service_extent in map_widget: {getattr(self.map_widget, 'service_extent', None)}")
+        self.log_message(f"DEBUG: service_extent: {self.service_extent}")
+        self.log_message("=" * 60)
+        
+        # If no selection exists yet, set default to REST endpoint service extent bounds
+        # CRITICAL: Use the REST endpoint extent (service_extent) for the box, NOT the map's displayed extent
+        # The map might show a slightly different area due to rounding or basemap coverage,
+        # but the box should show the exact bathymetry data bounds from the REST endpoint
+        if self.map_widget and self.map_widget.selected_bbox_world is None:
+            if self.service_extent:
+                self.log_message("DEBUG: Setting default bounds to REST endpoint service extent (bathymetry data bounds)")
+                self.log_message(f"DEBUG: REST endpoint extent: {self.service_extent}")
+                self.log_message(f"DEBUG: Map widget extent: {self.map_widget.extent}")
+                self.log_message(f"DEBUG: Map widget _requested_extent: {getattr(self.map_widget, '_requested_extent', None)}")
+                
+                # Set default selection to REST endpoint service extent bounds (exact bathymetry data bounds)
+                # This is the correct extent from the REST endpoint, not the map's displayed extent
+                self.map_widget.selected_bbox_world = self.service_extent
+                self.map_widget.set_selection_validity(True)
+                self.selected_bbox = self.service_extent
+                # Ensure service_extent is stored in map widget (this is the REST endpoint extent)
+                self.map_widget.service_extent = self.service_extent
+                self.log_message(f"DEBUG: Set selected_bbox_world to REST endpoint extent: {self.map_widget.selected_bbox_world}")
+                self.log_message(f"DEBUG: Set service_extent in map_widget to: {self.map_widget.service_extent}")
+                
+                # CRITICAL: Zoom to the REST endpoint bounds using zoom_to_selection
+                # This ensures the map extent is recalculated with padding and the box is positioned correctly
+                # This mimics what happens when the user hits return in a coordinate field
+                self.log_message("DEBUG: Zooming to REST endpoint extent to position box correctly")
+                QTimer.singleShot(300, lambda: self.zoom_to_selection(*self.service_extent))
+                self.log_message("Default selection set to service extent bounds, will zoom to dataset bounds")
+            else:
+                self.log_message("DEBUG: service_extent is None, cannot set default bounds")
+        else:
+            if self.map_widget:
+                self.log_message(f"DEBUG: Skipping default bounds - selected_bbox_world already set: {self.map_widget.selected_bbox_world}")
+            else:
+                self.log_message("DEBUG: Skipping default bounds - map_widget is None")
+    
+    def _zoom_to_service_extent(self):
+        """Zoom to service extent bounds - helper method for delayed zoom."""
+        self.log_message("=" * 60)
+        self.log_message("DEBUG: _zoom_to_service_extent called")
+        self.log_message(f"DEBUG: map_widget exists: {self.map_widget is not None}")
+        self.log_message(f"DEBUG: service_extent: {self.service_extent}")
+        
+        if self.map_widget and self.service_extent:
+            # Ensure the selected bbox is set to service extent (this is the dataset bounds)
+            self.log_message(f"DEBUG: Setting selected_bbox_world to service_extent: {self.service_extent}")
+            self.map_widget.selected_bbox_world = self.service_extent
+            self.map_widget.set_selection_validity(True)
+            self.selected_bbox = self.service_extent
+            # Ensure service extent is stored in map widget for color distinction
+            self.map_widget.service_extent = self.service_extent
+            self.log_message(f"DEBUG: Set service_extent in map_widget: {self.map_widget.service_extent}")
+            self.log_message(f"DEBUG: Current extent: {self.map_widget.extent}")
+            self.log_message(f"DEBUG: Current _requested_extent: {getattr(self.map_widget, '_requested_extent', None)}")
+            
+            # Zoom to the service extent - this will reload the map with the correct extent
+            self.log_message("DEBUG: Calling zoom_to_selection")
+            self.zoom_to_selection(*self.service_extent)
+            # After zoom completes, the map will reload and the box should be visible
+            # The box will be repainted in paintEvent when the new map loads
+            self.log_message("DEBUG: zoom_to_selection completed")
+        else:
+            if not self.map_widget:
+                self.log_message("DEBUG: map_widget is None")
+            if not self.service_extent:
+                self.log_message("DEBUG: service_extent is None")
+        self.log_message("=" * 60)
+        
         instructions = [
             "",
             "=" * 60,
@@ -1341,6 +1508,8 @@ class MainWindow(QMainWindow):
             self.map_widget.raster_function = new_raster_function
             self.map_widget.hillshade_raster_function = new_hillshade_raster_function
             self.map_widget.base_url = self.base_url
+            # Update service extent in map widget so it can distinguish dataset bounds from user selection
+            self.map_widget.service_extent = self.service_extent
         
         # Reload service info (this will update extent and reload map)
         self.load_service_info()

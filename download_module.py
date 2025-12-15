@@ -53,14 +53,16 @@ class BathymetryDownloader(QThread):
                 width = int((xmax - xmin) / 4.0)
                 height = int((ymax - ymin) / 4.0)
                 
-            # Check if size exceeds maximum (14,000 x 14,000 pixels)
-            if width > self.max_size or height > self.max_size:
+            # Check if size exceeds maximum only if tiling is disabled
+            # If tiling is enabled, we can handle any size
+            if not self.use_tile_download and (width > self.max_size or height > self.max_size):
                 error_msg = (
                     f"Selected area exceeds maximum download size ({self.max_size} x {self.max_size} pixels).\n"
                     f"Requested size: {width} x {height} pixels.\n\n"
                     f"Please either:\n"
-                    f"1. Select a smaller area, or\n"
-                    f"2. Increase the cell size (currently {self.pixel_size if self.pixel_size else 4}m)"
+                    f"1. Enable Tile Download option, or\n"
+                    f"2. Select a smaller area, or\n"
+                    f"3. Increase the cell size (currently {self.pixel_size if self.pixel_size else 4}m)"
                 )
                 self.error.emit(error_msg)
                 return
