@@ -161,6 +161,12 @@ class MapWidget(QWidget):
     selectionCompleted = pyqtSignal(float, float, float, float)  # xmin, ymin, xmax, ymax - emitted when selection is finished
     mapFirstLoaded = pyqtSignal()  # Emitted when map is successfully loaded for the first time
     
+    def set_selection_validity(self, is_valid):
+        """Set whether the current selection is within size limits."""
+        if self.selection_is_valid != is_valid:
+            self.selection_is_valid = is_valid
+            self.update()  # Trigger repaint to update color
+    
     def __init__(self, base_url, initial_extent, parent=None, raster_function="Shaded Relief - Haxby - MD Hillshade 2", show_basemap=True, show_hillshade=True, use_blend=False, hillshade_raster_function="Multidirectional Hillshade 3x"):
         super().__init__(parent)
         self.base_url = base_url
@@ -185,6 +191,11 @@ class MapWidget(QWidget):
         self._active_loaders = []  # Track active loaders
         self._load_timer = None  # Timer for debouncing zoom operations
         self.selected_bbox_world = None  # Store selected bbox in world coordinates for persistent display
+        self.selection_is_valid = True  # Track if selection is within size limits (True = valid/green, False = too large/red)
+        self._extent_locked = False  # Flag to prevent extent changes during resize
+        self._original_pixmap_size = None  # Store original pixmap size before scaling for coordinate conversion
+        self._scaled_pixmap_size = None  # Store scaled pixmap size (what's actually drawn)
+        self._debug_world_to_screen = False  # Debug flag for world_to_screen logging
         print(f"MapWidget initialized with raster function: {self.raster_function}, show_basemap: {self.show_basemap}, show_hillshade: {self.show_hillshade}, use_blend: {self.use_blend}")
         
         # Set a smaller minimum size to allow 60/40 split (60% of 1200 = 720px)
@@ -271,6 +282,10 @@ class MapWidget(QWidget):
         
         self._loading = True
         
+        # Preserve the current extent - we'll use this for the request
+        # and restore it after loading to prevent the selection from moving
+        requested_extent = self.extent
+        
         print("=" * 50)
         print("load_map() called!")
         print(f"Widget visible: {self.isVisible()}")
@@ -293,13 +308,16 @@ class MapWidget(QWidget):
         # Use widget size to fill the window completely
         size = (widget_width, widget_height)
         
-        print(f"Starting map load with extent: {self.extent}, size: {size}")
+        print(f"Starting map load with extent: {requested_extent}, size: {size}")
         print(f"Using raster function: {self.raster_function}")
+        
+        # Store the requested extent so we can restore it after loading
+        self._requested_extent = requested_extent
         
         # Load basemap if enabled
         if self.show_basemap:
             print("Loading basemap...")
-            self.basemap_loader = BasemapLoader(self.extent, size)
+            self.basemap_loader = BasemapLoader(requested_extent, size)
             self.basemap_loader.tileLoaded.connect(self.on_basemap_loaded)
             self.basemap_loader.finished.connect(self._check_all_loaders_finished)
             self._active_loaders.append(self.basemap_loader)
@@ -308,7 +326,7 @@ class MapWidget(QWidget):
         # Load hillshade layer if enabled (as underlay)
         if self.show_hillshade:
             print("Loading hillshade layer...")
-            self.hillshade_loader = MapTileLoader(self.base_url, self.extent, size, self.hillshade_raster_function)
+            self.hillshade_loader = MapTileLoader(self.base_url, requested_extent, size, self.hillshade_raster_function)
             self.hillshade_loader.tileLoaded.connect(self.on_hillshade_loaded)
             self.hillshade_loader.finished.connect(self._check_all_loaders_finished)
             self._active_loaders.append(self.hillshade_loader)
@@ -316,7 +334,7 @@ class MapWidget(QWidget):
         
         # Load bathymetry layer (main layer)
         print("Creating MapTileLoader...")
-        self.loader = MapTileLoader(self.base_url, self.extent, size, self.raster_function)
+        self.loader = MapTileLoader(self.base_url, requested_extent, size, self.raster_function)
         print("Connecting signals...")
         self.loader.tileLoaded.connect(self.on_tile_loaded)
         self.loader.finished.connect(self.on_loader_finished)
@@ -390,10 +408,24 @@ class MapWidget(QWidget):
             widget_size = self.size()
             print(f"Widget size in on_tile_loaded: {widget_size.width()}x{widget_size.height()}")
             
+            # Store original pixmap size before any scaling
+            # This is needed for accurate world-to-screen coordinate conversion
+            # The original pixmap size represents the actual pixel dimensions requested from the server
+            # which directly correspond to the geographic extent
+            self._original_pixmap_size = (pixmap.width(), pixmap.height())
+            
+            # CRITICAL: For coordinate conversion, we need to use a consistent reference size
+            # When the pixmap matches the widget size, we should still use the widget size
+            # for coordinate conversion to maintain consistent visual size of the selection box
+            # When the pixmap is scaled, we use the scaled size
+            
             # Don't scale if sizes match - use pixmap directly
             if widget_size.width() == pixmap.width() and widget_size.height() == pixmap.height():
                 print("Pixmap size matches widget, using directly")
                 self.current_pixmap = pixmap
+                # Use widget size for coordinate conversion to maintain consistent visual size
+                # This ensures the selection box doesn't change size when pixmap pixel size changes
+                self._scaled_pixmap_size = (widget_size.width(), widget_size.height())
             elif widget_size.width() > 0 and widget_size.height() > 0:
                 # Scale to fit widget while maintaining aspect ratio
                 scaled_pixmap = pixmap.scaled(
@@ -403,12 +435,28 @@ class MapWidget(QWidget):
                 )
                 print(f"Scaled pixmap: {scaled_pixmap.width()}x{scaled_pixmap.height()}")
                 self.current_pixmap = scaled_pixmap
+                # Use the scaled size (what's actually drawn) for coordinate conversion
+                self._scaled_pixmap_size = (scaled_pixmap.width(), scaled_pixmap.height())
             else:
                 # Widget not sized yet, use pixmap as-is
                 print("Widget not sized, using pixmap as-is")
                 self.current_pixmap = pixmap
+                self._scaled_pixmap_size = (pixmap.width(), pixmap.height())  # No scaling
                 
-            self.extent = (xmin, ymin, xmax, ymax)
+            # ALWAYS preserve the requested extent instead of using the server's response
+            # This prevents the selection from moving when the window is resized
+            # The _requested_extent is set in load_map() and should be preserved
+            # until the user explicitly changes the extent (via pan/zoom)
+            if self._extent_locked:
+                # Extent is locked (during resize) - never change it
+                pass  # Keep current extent unchanged
+            elif hasattr(self, '_requested_extent') and self._requested_extent is not None:
+                # Restore the extent we requested, not what the server returned
+                self.extent = self._requested_extent
+                # Keep _requested_extent so it persists across multiple loads during resize
+            else:
+                # Only update extent if this is the first load (no requested extent stored)
+                self.extent = (xmin, ymin, xmax, ymax)
             print(f"Setting current_pixmap, isNull: {self.current_pixmap.isNull()}, size: {self.current_pixmap.width()}x{self.current_pixmap.height()}")
             print(f"Calling update() to repaint widget")
             self.update()  # Trigger repaint
@@ -448,16 +496,41 @@ class MapWidget(QWidget):
         """Convert world coordinates to screen coordinates."""
         if self.current_pixmap.isNull():
             return None
-            
+        
+        widget_rect = self.rect()
+        
+        # CRITICAL FIX: Always use the actual pixmap size as drawn for coordinate conversion
+        # This ensures the selection box maintains consistent visual size
+        # Get the actual pixmap rect (what's actually drawn)
         pixmap_rect = self.current_pixmap.rect()
-        pixmap_rect.moveCenter(self.rect().center())
+        pixmap_width = pixmap_rect.width()
+        pixmap_height = pixmap_rect.height()
+        
+        # Center the pixmap in the widget (EXACT same logic as in paintEvent)
+        # This must match the centering logic in paintEvent exactly
+        x = (widget_rect.width() - pixmap_width) // 2
+        y = (widget_rect.height() - pixmap_height) // 2
+        # Create the target rect that matches paintEvent exactly
+        target_rect = QRect(x, y, pixmap_width, pixmap_height)
         
         xmin, ymin, xmax, ymax = self.extent
-        rel_x = (world_x - xmin) / (xmax - xmin)
-        rel_y = (ymax - world_y) / (ymax - ymin)  # Y is inverted
         
-        screen_x = pixmap_rect.left() + rel_x * pixmap_rect.width()
-        screen_y = pixmap_rect.top() + rel_y * pixmap_rect.height()
+        # Calculate relative position within the extent (0.0 to 1.0)
+        # This is independent of pixmap size - it's purely based on geographic extent
+        rel_x = (world_x - xmin) / (xmax - xmin) if (xmax - xmin) != 0 else 0
+        rel_y = (ymax - world_y) / (ymax - ymin) if (ymax - ymin) != 0 else 0  # Y is inverted
+        
+        # Convert to screen coordinates using the target rect (same as paintEvent)
+        # The target rect represents where the geographic extent is drawn on screen
+        # CRITICAL: This must use the same rect calculation as paintEvent
+        screen_x = target_rect.left() + rel_x * target_rect.width()
+        screen_y = target_rect.top() + rel_y * target_rect.height()
+        
+        # DEBUG: Log conversion details (only when flag is set to avoid spam)
+        if hasattr(self, '_debug_world_to_screen') and self._debug_world_to_screen:
+            print(f"[DEBUG world_to_screen] world=({world_x:.2f}, {world_y:.2f}), extent=({xmin:.2f}, {ymin:.2f}, {xmax:.2f}, {ymax:.2f})")
+            print(f"[DEBUG world_to_screen] rel=({rel_x:.4f}, {rel_y:.4f}), target_rect={target_rect}")
+            print(f"[DEBUG world_to_screen] screen=({screen_x:.1f}, {screen_y:.1f})")
         
         return QPoint(int(screen_x), int(screen_y))
         
@@ -495,12 +568,32 @@ class MapWidget(QWidget):
             
         xmin, ymin, xmax, ymax = bbox_world
         
+        # DEBUG: Log conversion details
+        print(f"[DEBUG world_bbox_to_screen_rect] bbox_world: {bbox_world}")
+        print(f"[DEBUG world_bbox_to_screen_rect] current extent: {self.extent}")
+        print(f"[DEBUG world_bbox_to_screen_rect] widget size: {self.width()}x{self.height()}")
+        if hasattr(self, '_scaled_pixmap_size') and self._scaled_pixmap_size:
+            print(f"[DEBUG world_bbox_to_screen_rect] scaled pixmap size: {self._scaled_pixmap_size}")
+        if hasattr(self, '_original_pixmap_size') and self._original_pixmap_size:
+            print(f"[DEBUG world_bbox_to_screen_rect] original pixmap size: {self._original_pixmap_size}")
+        if not self.current_pixmap.isNull():
+            print(f"[DEBUG world_bbox_to_screen_rect] current pixmap size: {self.current_pixmap.width()}x{self.current_pixmap.height()}")
+        
+        # Enable debug logging for world_to_screen
+        self._debug_world_to_screen = True
+        
         # Convert corners to screen coordinates
         top_left = self.world_to_screen(xmin, ymax)
         bottom_right = self.world_to_screen(xmax, ymin)
         
+        # Disable debug logging
+        self._debug_world_to_screen = False
+        
         if top_left and bottom_right:
-            return QRect(top_left, bottom_right)
+            screen_rect = QRect(top_left, bottom_right)
+            print(f"[DEBUG world_bbox_to_screen_rect] screen_rect: {screen_rect} (top_left={top_left}, bottom_right={bottom_right})")
+            print(f"[DEBUG world_bbox_to_screen_rect] screen_rect size: {screen_rect.width()}x{screen_rect.height()}")
+            return screen_rect
         return None
         
     def mousePressEvent(self, event):
@@ -552,6 +645,9 @@ class MapWidget(QWidget):
                     ymax + rel_delta_y
                 )
                 self.pan_start = current_pos
+                # Clear the requested extent when panning so it doesn't override the new extent
+                if hasattr(self, '_requested_extent'):
+                    self._requested_extent = None
                 self.clear_selection()
                 
                 # Debounce: Cancel any pending load and schedule a new one after a delay
@@ -619,6 +715,9 @@ class MapWidget(QWidget):
         new_ymax = center_y + height / 2
         
         self.extent = (new_xmin, new_ymin, new_xmax, new_ymax)
+        # Clear the requested extent when zooming so it doesn't override the new extent
+        if hasattr(self, '_requested_extent'):
+            self._requested_extent = None
         self.clear_selection()
         
         # Debounce: Cancel any pending load and schedule a new one after a delay
@@ -708,8 +807,13 @@ class MapWidget(QWidget):
         if self.selected_bbox_world:
             bbox_screen = self.world_bbox_to_screen_rect(self.selected_bbox_world)
             if bbox_screen:
-                pen = QPen(QColor(128, 0, 128), 2, Qt.PenStyle.DashLine)  # Purple dashed line
-                brush = QBrush(QColor(128, 0, 128, 20))  # Light purple fill
+                # Use red if selection is too large, green if valid
+                if self.selection_is_valid:
+                    pen = QPen(QColor(0, 255, 0), 2, Qt.PenStyle.DashLine)  # Green dashed line
+                    brush = QBrush(QColor(0, 255, 0, 20))  # Light green fill
+                else:
+                    pen = QPen(QColor(255, 0, 0), 2, Qt.PenStyle.DashLine)  # Red dashed line
+                    brush = QBrush(QColor(255, 0, 0, 20))  # Light red fill
                 painter.setPen(pen)
                 painter.setBrush(brush)
                 painter.drawRect(bbox_screen)
@@ -717,8 +821,8 @@ class MapWidget(QWidget):
         # Draw active selection rectangle (while dragging)
         if self.selection_start and self.selection_end:
             selection_rect = QRect(self.selection_start, self.selection_end).normalized()
-            pen = QPen(QColor(255, 0, 0), 2, Qt.PenStyle.DashLine)
-            brush = QBrush(QColor(255, 0, 0, 30))
+            pen = QPen(QColor(255, 255, 0), 2, Qt.PenStyle.DashLine)  # Yellow dashed line
+            brush = QBrush(QColor(255, 255, 0, 30))  # Light yellow fill
             painter.setPen(pen)
             painter.setBrush(brush)
             painter.drawRect(selection_rect)

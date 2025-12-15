@@ -30,6 +30,17 @@ __version__ = "2025.1"
 
 import sys
 import os
+
+# Set PROJ_LIB environment variable for PyInstaller builds
+# This ensures pyproj can find its data files when running as an executable
+if getattr(sys, 'frozen', False):
+    # Running as compiled executable
+    if hasattr(sys, '_MEIPASS'):
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        proj_data_path = os.path.join(sys._MEIPASS, 'proj')
+        if os.path.exists(proj_data_path):
+            os.environ['PROJ_LIB'] = proj_data_path
+
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QLineEdit, QPushButton, 
                              QFileDialog, QComboBox, QProgressBar, QTextEdit,
@@ -232,14 +243,29 @@ class MainWindow(QMainWindow):
         self.ymax_edit = QLineEdit()
         self.ymax_edit.setPlaceholderText("YMax")
         
-        webmercator_layout.addWidget(QLabel("XMin:"))
-        webmercator_layout.addWidget(self.xmin_edit)
-        webmercator_layout.addWidget(QLabel("YMin:"))
-        webmercator_layout.addWidget(self.ymin_edit)
-        webmercator_layout.addWidget(QLabel("XMax:"))
-        webmercator_layout.addWidget(self.xmax_edit)
-        webmercator_layout.addWidget(QLabel("YMax:"))
-        webmercator_layout.addWidget(self.ymax_edit)
+        # XMin row
+        xmin_row = QHBoxLayout()
+        xmin_row.addWidget(QLabel("XMin:"))
+        xmin_row.addWidget(self.xmin_edit)
+        webmercator_layout.addLayout(xmin_row)
+        
+        # YMin row
+        ymin_row = QHBoxLayout()
+        ymin_row.addWidget(QLabel("YMin:"))
+        ymin_row.addWidget(self.ymin_edit)
+        webmercator_layout.addLayout(ymin_row)
+        
+        # XMax row
+        xmax_row = QHBoxLayout()
+        xmax_row.addWidget(QLabel("XMax:"))
+        xmax_row.addWidget(self.xmax_edit)
+        webmercator_layout.addLayout(xmax_row)
+        
+        # YMax row
+        ymax_row = QHBoxLayout()
+        ymax_row.addWidget(QLabel("YMax:"))
+        ymax_row.addWidget(self.ymax_edit)
+        webmercator_layout.addLayout(ymax_row)
         
         # Connect WebMercator field changes to update Geographic and map
         self.xmin_edit.editingFinished.connect(self.on_webmercator_changed)
@@ -269,14 +295,29 @@ class MainWindow(QMainWindow):
         self.east_edit.editingFinished.connect(self.on_geographic_changed)
         self.north_edit.editingFinished.connect(self.on_geographic_changed)
         
-        geographic_layout.addWidget(QLabel("West:"))
-        geographic_layout.addWidget(self.west_edit)
-        geographic_layout.addWidget(QLabel("South:"))
-        geographic_layout.addWidget(self.south_edit)
-        geographic_layout.addWidget(QLabel("East:"))
-        geographic_layout.addWidget(self.east_edit)
-        geographic_layout.addWidget(QLabel("North:"))
-        geographic_layout.addWidget(self.north_edit)
+        # West row
+        west_row = QHBoxLayout()
+        west_row.addWidget(QLabel("West:"))
+        west_row.addWidget(self.west_edit)
+        geographic_layout.addLayout(west_row)
+        
+        # South row
+        south_row = QHBoxLayout()
+        south_row.addWidget(QLabel("South:"))
+        south_row.addWidget(self.south_edit)
+        geographic_layout.addLayout(south_row)
+        
+        # East row
+        east_row = QHBoxLayout()
+        east_row.addWidget(QLabel("East:"))
+        east_row.addWidget(self.east_edit)
+        geographic_layout.addLayout(east_row)
+        
+        # North row
+        north_row = QHBoxLayout()
+        north_row.addWidget(QLabel("North:"))
+        north_row.addWidget(self.north_edit)
+        geographic_layout.addLayout(north_row)
         
         geographic_group.setLayout(geographic_layout)
         selection_coords_layout.addWidget(geographic_group)
@@ -293,20 +334,27 @@ class MainWindow(QMainWindow):
         
         # Output options
         output_group = QGroupBox("Output Options")
-        output_layout = QVBoxLayout()
+        output_layout = QHBoxLayout()  # Horizontal layout for side-by-side placement
         
-        # Cell size selector
-        output_layout.addWidget(QLabel("Cell Size (m):"))
+        # Left side: Cell size selector (label and dropdown on same line)
+        cell_size_row = QHBoxLayout()
+        cell_size_row.addWidget(QLabel("Cell Size (m):"))
         self.cell_size_combo = QComboBox()
         self.cell_size_combo.addItems(["4", "8", "16"])
         self.cell_size_combo.setCurrentText("4")  # Default to 4m
         self.cell_size_combo.currentTextChanged.connect(self.on_cell_size_changed)
-        output_layout.addWidget(self.cell_size_combo)
+        cell_size_row.addWidget(self.cell_size_combo)
+        cell_size_row.addStretch()  # Push to left side
+        output_layout.addLayout(cell_size_row)
         
-        output_layout.addWidget(QLabel("Output CRS:"))
+        # Right side: Output CRS selector (label and dropdown on same line)
+        crs_row = QHBoxLayout()
+        crs_row.addWidget(QLabel("Output CRS:"))
         self.crs_combo = QComboBox()
         self.crs_combo.addItems(["EPSG:3857", "EPSG:4326"])
-        output_layout.addWidget(self.crs_combo)
+        crs_row.addWidget(self.crs_combo)
+        crs_row.addStretch()  # Push to right side
+        output_layout.addLayout(crs_row)
         
         output_group.setLayout(output_layout)
         right_layout.addWidget(output_group)
@@ -351,13 +399,11 @@ class MainWindow(QMainWindow):
         
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
-        self.log_text.setMaximumHeight(150)
+        # Remove maximum height so it can expand to fill available space
         log_layout.addWidget(self.log_text)
         
         log_group.setLayout(log_layout)
-        right_layout.addWidget(log_group)
-        
-        right_layout.addStretch()
+        right_layout.addWidget(log_group, 1)  # Add stretch factor to make it expand
         
         main_layout.addWidget(right_panel)
         
@@ -593,8 +639,10 @@ class MainWindow(QMainWindow):
             bbox = self.map_widget.get_selection_bbox()
         
         if not bbox:
-            # No selection - disable button
+            # No selection - disable button and clear selection validity
             self.download_btn.setEnabled(False)
+            if self.map_widget:
+                self.map_widget.set_selection_validity(True)  # Default to valid (no selection shown)
             return
         
         # Check if selection exceeds maximum size
@@ -607,15 +655,23 @@ class MainWindow(QMainWindow):
             pixels_height = int(height_meters / cell_size)
             max_size = 14000
             
-            if pixels_width > max_size or pixels_height > max_size:
-                # Selection too large - disable button
-                self.download_btn.setEnabled(False)
-            else:
+            is_valid = not (pixels_width > max_size or pixels_height > max_size)
+            
+            # Update map widget selection color
+            if self.map_widget:
+                self.map_widget.set_selection_validity(is_valid)
+            
+            if is_valid:
                 # Valid selection - enable button
                 self.download_btn.setEnabled(True)
+            else:
+                # Selection too large - disable button
+                self.download_btn.setEnabled(False)
         except Exception:
             # Error calculating - disable button to be safe
             self.download_btn.setEnabled(False)
+            if self.map_widget:
+                self.map_widget.set_selection_validity(True)  # Default to valid on error
     
     def on_cell_size_changed(self, cell_size_text):
         """Handle cell size change - update pixel count if selection exists."""
@@ -1040,7 +1096,58 @@ class MainWindow(QMainWindow):
     def _refresh_map_on_resize(self):
         """Refresh map display after window resize."""
         if self.map_widget and self.map_widget.map_loaded:
+            # CRITICAL: Preserve both the extent AND the selected bbox when resizing
+            # The selected_bbox_world stores the world coordinates of the selection
+            # and should NEVER change - it's only set when a new selection is made
+            # The extent determines what area of the map is visible and should be preserved during resize
+            
+            # DEBUG: Log before resize
+            print(f"[DEBUG _refresh_map_on_resize] BEFORE RESIZE:")
+            print(f"  Widget size: {self.map_widget.width()}x{self.map_widget.height()}")
+            print(f"  Extent: {self.map_widget.extent}")
+            print(f"  Selected bbox_world: {self.map_widget.selected_bbox_world}")
+            if hasattr(self.map_widget, '_scaled_pixmap_size') and self.map_widget._scaled_pixmap_size:
+                print(f"  Scaled pixmap size: {self.map_widget._scaled_pixmap_size}")
+            if not self.map_widget.current_pixmap.isNull():
+                print(f"  Current pixmap size: {self.map_widget.current_pixmap.width()}x{self.map_widget.current_pixmap.height()}")
+            
+            # Lock the extent to prevent any changes during resize
+            preserved_extent = self.map_widget.extent
+            preserved_selection = self.map_widget.selected_bbox_world
+            
+            # Set the requested extent and lock it
+            self.map_widget._requested_extent = preserved_extent
+            self.map_widget._extent_locked = True
+            
+            # Reload the map (it will preserve extent via _requested_extent and _extent_locked)
             self.map_widget.load_map()
+            
+            # CRITICAL: Force extent to be preserved after load_map completes
+            # We need to do this after the map loads because load_map is asynchronous
+            def ensure_extent_preserved():
+                print(f"[DEBUG _refresh_map_on_resize] AFTER RESIZE (in callback):")
+                print(f"  Widget size: {self.map_widget.width()}x{self.map_widget.height()}")
+                print(f"  Extent: {self.map_widget.extent}")
+                print(f"  Selected bbox_world: {self.map_widget.selected_bbox_world}")
+                if hasattr(self.map_widget, '_scaled_pixmap_size') and self.map_widget._scaled_pixmap_size:
+                    print(f"  Scaled pixmap size: {self.map_widget._scaled_pixmap_size}")
+                if not self.map_widget.current_pixmap.isNull():
+                    print(f"  Current pixmap size: {self.map_widget.current_pixmap.width()}x{self.map_widget.current_pixmap.height()}")
+                
+                if preserved_extent:
+                    self.map_widget.extent = preserved_extent
+                    self.map_widget._requested_extent = preserved_extent
+                    print(f"  Restored extent to: {preserved_extent}")
+                if preserved_selection:
+                    self.map_widget.selected_bbox_world = preserved_selection
+                    print(f"  Restored selected_bbox_world to: {preserved_selection}")
+                # Unlock extent after ensuring it's preserved
+                self.map_widget._extent_locked = False
+                # Force a repaint to update the selection box
+                self.map_widget.update()
+            
+            # Wait for map to load, then ensure extent is preserved
+            QTimer.singleShot(1000, ensure_extent_preserved)
     
     def closeEvent(self, event):
         """Handle window close event."""
