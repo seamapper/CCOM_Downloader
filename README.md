@@ -6,22 +6,28 @@ A PyQt6-based desktop application for downloading bathymetry data from ArcGIS Im
 
 - **Interactive Map Display**: Visualize bathymetry data with an interactive map widget
 - **Area Selection**: Click and drag to select areas of interest for download
+- **Multiple Data Sources**: Switch between different bathymetry datasets (Hi Resolution and Regional)
 - **Multiple Layer Support**:
   - World Imagery basemap (optional)
-  - Bathymetry hillshade underlay layer
+  - Bathymetry hillshade underlay layer (automatically enables blend mode)
   - Main bathymetry layer with adjustable opacity
-  - Overlay blend mode for enhanced visualization
+  - Automatic blend mode when hillshade is enabled
 - **Raster Function**: Uses "DAR - StdDev - BlueGreen" for consistent visualization
-- **Cell Size Selection**: Choose from 4m, 8m, or 16m pixel resolution
+- **Dynamic Cell Size Selection**: Cell size options automatically adjust based on selected data source (1x, 2x, 3x base resolution)
 - **Coordinate Systems**: Support for EPSG:3857 (Web Mercator) and EPSG:4326 (WGS84)
 - **Coordinate Display**: Real-time display of selected area in both Web Mercator and Geographic (WGS84) coordinates
 - **Pixel Count Display**: Shows expected pixel dimensions based on selected area and cell size
-- **Maximum Size Validation**: Prevents downloads exceeding 14,000 × 14,000 pixels
+- **Tile Download Support**: Automatically tiles large downloads for reliable data retrieval
 - **Automatic Filename Generation**: Default filename includes cell size and timestamp
+- **Visual Feedback**:
+  - Yellow dashed box: Dataset bounds
+  - Green dashed box: Valid user selection
+  - Red dashed box: Selection too large
+  - Black background: NoData areas when basemap is disabled
 - **Mouse Controls**:
   - Mouse wheel: Zoom in/out (centered on window)
-  - Middle-click drag: Pan the map
-  - Left-click drag: Select area for download
+  - Middle-click drag: Pan the map (shows red dashed pan line)
+  - Left-click drag: Select area for download (green dashed box)
 
 ## Requirements
 
@@ -72,29 +78,45 @@ python main.py
 ### Running the Executable
 
 A pre-built Windows executable is available in the `dist/` directory:
-- `CCOM Bathymetry Downloader V2025.1.exe`
+- `CCOM Bathymetry Downloader V2025.2.exe`
 
 Simply double-click the executable to run the application.
 
 ### Using the Application
 
-1. **Select an Area**: Click and drag on the map to select the area you want to download
-2. **Adjust Settings**:
-   - Choose cell size (4m, 8m, or 16m)
+1. **Select Data Source**: Choose from available bathymetry datasets (defaults to highest resolution)
+2. **Select an Area**: Click and drag on the map to select the area you want to download
+   - The initial dataset bounds are shown with a yellow dashed box
+   - Your selection is shown with a green dashed box while drawing
+   - Valid selections remain green; invalid (too large) selections turn red
+3. **Adjust Settings**:
+   - Choose cell size (options vary by data source: 1x, 2x, 3x base resolution)
    - Select output coordinate system (EPSG:3857 or EPSG:4326)
-   - Toggle basemap visibility
-   - Toggle hillshade layer
+   - Toggle basemap visibility (when off, NoData areas appear black)
+   - Toggle hillshade layer (automatically enables blend mode)
    - Adjust opacity of the main bathymetry layer
-   - Enable/disable overlay blend mode
-3. **Download**: Click "Download Selected Area" button
-4. **Save File**: Choose a save location in the file dialog (default filename includes cell size and timestamp)
+4. **Download**: Click "Download Selected Area" button (bold when manual selection is active)
+   - Enable "Tile Download" for large datasets (recommended, enabled by default)
+   - Choose save location if no default output directory is set
+5. **Save File**: Default filename includes cell size and timestamp
 
-## Data Source
+## Data Sources
 
-The application connects to the CCOM ArcGIS ImageServer:
+The application supports multiple CCOM ArcGIS ImageServer data sources:
+
+### WGOM-LI-SNE Hi Resolution
 - **Service URL**: `https://gis.ccom.unh.edu/server/rest/services/WGOM_LI_SNE/WGOM_LI_SNE_BTY_4m_20231005_WMAS_IS/ImageServer`
+- **Base Resolution**: 4m
 - **Raster Function**: DAR - StdDev - BlueGreen
 - **Hillshade Function**: Multidirectional Hillshade 3x
+
+### WGOM-LI-SNE Regional
+- **Service URL**: `https://gis.ccom.unh.edu/server/rest/services/WGOM_LI_SNE/WGOM_LI_SNE_Regional_Bathymetry_16m_WMAS_IS/ImageServer`
+- **Base Resolution**: 16m
+- **Raster Function**: DAR - StdDev - BlueGreen
+- **Hillshade Function**: Multidirectional Hillshade 3x
+
+Cell size options automatically adjust based on the selected data source (1x, 2x, 3x the base resolution).
 
 ## Output Format
 
@@ -112,10 +134,18 @@ To build a Windows executable:
 
 ```bash
 pip install pyinstaller
-pyinstaller --onefile --noconsole --icon=media\CCOM.ico --name="CCOM Bathymetry Downloader V2025.1" main.py
+pyinstaller "CCOM Bathymetry Downloader V2025.2.spec"
+```
+
+Or use the command line:
+
+```bash
+pyinstaller --onefile --noconsole --icon=media\CCOM.ico --name="CCOM Bathymetry Downloader V2025.2" main.py
 ```
 
 The executable will be created in the `dist/` directory.
+
+**Note**: The spec file includes PROJ data files and rasterio hidden imports required for coordinate transformations and GeoTIFF creation.
 
 ### macOS
 
@@ -232,9 +262,9 @@ To build a macOS application (.app bundle) manually:
        <key>CFBundleName</key>
        <string>CCOM Bathymetry Downloader</string>
        <key>CFBundleVersion</key>
-       <string>2025.1</string>
+       <string>2025.2</string>
        <key>CFBundleShortVersionString</key>
-       <string>2025.1</string>
+       <string>2025.2</string>
        <key>CFBundleIconFile</key>
        <string>CCOM</string>
        <key>NSHighResolutionCapable</key>
@@ -265,10 +295,10 @@ To build a macOS application (.app bundle) manually:
        'plist': {
            'CFBundleName': 'CCOM Bathymetry Downloader',
            'CFBundleDisplayName': 'CCOM Bathymetry Downloader',
-           'CFBundleGetInfoString': 'CCOM Bathymetry Downloader v2025.1',
+           'CFBundleGetInfoString': 'CCOM Bathymetry Downloader v2025.2',
            'CFBundleIdentifier': 'edu.unh.ccom.bathymetry-downloader',
-           'CFBundleVersion': '2025.1',
-           'CFBundleShortVersionString': '2025.1',
+           'CFBundleVersion': '2025.2',
+           'CFBundleShortVersionString': '2025.2',
            'NSHighResolutionCapable': True,
        }
    }
@@ -307,7 +337,7 @@ To create a disk image (.dmg) for distribution:
      --icon "CCOM Bathymetry Downloader.app" 150 190 \
      --hide-extension "CCOM Bathymetry Downloader.app" \
      --app-drop-link 450 190 \
-     "CCOM_Bathymetry_Downloader_V2025.1.dmg" \
+     "CCOM_Bathymetry_Downloader_V2025.2.dmg" \
      "CCOM Bathymetry Downloader.app"
    ```
 
@@ -338,7 +368,7 @@ If you plan to distribute the app outside the Mac App Store:
      --primary-bundle-id "edu.unh.ccom.bathymetry-downloader" \
      --username "your-apple-id@example.com" \
      --password "@keychain:AC_PASSWORD" \
-     --file "CCOM_Bathymetry_Downloader_V2025.1.dmg"
+     --file "CCOM_Bathymetry_Downloader_V2025.2.dmg"
    ```
 
 The executable/app will be created in the `dist/` directory.
@@ -356,7 +386,27 @@ Email: pjohnson@ccom.unh.edu
 
 ## Version
 
-Current version: **2025.1**
+Current version: **2025.2**
+
+### Version History
+
+**2025.2** (Current)
+- Fixed initial map load bounds and box positioning
+- Added data source selection (multiple datasets)
+- Added tile download option for large datasets
+- Auto blend mode with hillshade (removed separate checkbox)
+- Black NoData areas when basemap is disabled
+- Green selection box while drawing
+- Bold download button for manual selections only
+- Dynamic cell size options based on data source
+- Improved zoom to full extent behavior
+
+**2025.1**
+- First release of the program
+- Interactive map with area selection
+- Multiple layer support
+- Coordinate system conversion
+- GeoTIFF export functionality
 
 ## Acknowledgments
 
