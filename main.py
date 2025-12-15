@@ -388,6 +388,11 @@ class MainWindow(QMainWindow):
         self.download_btn.setEnabled(False)
         right_layout.addWidget(self.download_btn)
         
+        # Tile download checkbox
+        self.tile_download_checkbox = QCheckBox("Tile Download")
+        self.tile_download_checkbox.setChecked(True)  # On by default
+        right_layout.addWidget(self.tile_download_checkbox)
+        
         # Progress
         progress_group = QGroupBox("Progress")
         progress_layout = QVBoxLayout()
@@ -1085,6 +1090,9 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(0)
         self.status_label.setText("Starting download...")
         
+        # Get tile download setting
+        use_tile_download = self.tile_download_checkbox.isChecked()
+        
         # Create downloader thread
         self.downloader = BathymetryDownloader(
             self.base_url,
@@ -1092,7 +1100,8 @@ class MainWindow(QMainWindow):
             output_path,
             output_crs,
             pixel_size=cell_size,
-            max_size=max_size
+            max_size=max_size,
+            use_tile_download=use_tile_download
         )
         self.downloader.progress.connect(self.progress_bar.setValue)
         self.downloader.status.connect(self.on_status_update)

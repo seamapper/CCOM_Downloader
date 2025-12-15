@@ -21,7 +21,7 @@ class BathymetryDownloader(QThread):
     error = pyqtSignal(str)  # Error message
     
     def __init__(self, base_url, bbox, output_path, output_crs="EPSG:3857", 
-                 pixel_size=None, max_size=14000):
+                 pixel_size=None, max_size=14000, use_tile_download=False):
         super().__init__()
         self.base_url = base_url
         self.bbox = bbox  # (xmin, ymin, xmax, ymax) in EPSG:3857
@@ -29,6 +29,9 @@ class BathymetryDownloader(QThread):
         self.output_crs = output_crs
         self.pixel_size = pixel_size  # If None, use service default (4m)
         self.max_size = max_size  # Maximum image size (width and height) from service
+        self.use_tile_download = use_tile_download  # Whether to use tiled downloads
+        self.tile_overlap = 5  # Number of pixels overlap between tiles
+        self.tile_max_size = 2000  # Maximum size for a single tile (pixels)
         self.cancelled = False
         
     def cancel(self):
@@ -61,102 +64,59 @@ class BathymetryDownloader(QThread):
                 )
                 self.error.emit(error_msg)
                 return
+            
+            # Check if tiling is needed
+            needs_tiling = self.use_tile_download and (width > self.tile_max_size or height > self.tile_max_size)
+            
+            if needs_tiling:
+                # Use tiled download
+                result = self._download_tiled(xmin, ymin, xmax, ymax, width, height)
+                if result is None or result[0] is None:
+                    return  # Error already emitted
+                img_array, source_nodata, transform, downloaded_crs = result
+            else:
+                # Single download
+                self.status.emit(f"Requesting data: {width}x{height} pixels...")
+                self.progress.emit(10)
                 
-            self.status.emit(f"Requesting data: {width}x{height} pixels...")
-            self.progress.emit(10)
-            
-            if self.cancelled:
-                return
-                
-            # Download raw data (no raster function for raw values)
-            # Try multiple approaches to get raw data
-            
-            url = f"{self.base_url}/exportImage"
-            
-            # First, try to get raw TIFF data
-            params = {
-                "bbox": f"{xmin},{ymin},{xmax},{ymax}",
-                "size": f"{width},{height}",
-                "format": "tiff",
-                "f": "image",
-                "noData": "true",
-                "interpolation": "RSP_BilinearInterpolation"
-            }
-            
-            # Don't specify rasterFunction to get raw values
-            # The service should return raw F32 values
-            
-            self.progress.emit(30)
-            self.status.emit("Downloading data...")
-            
-            if self.cancelled:
-                return
-                
-            img_array = None
-            source_nodata = None
-            transform = None
-            downloaded_crs = None
-            
-            try:
-                response = requests.get(url, params=params, timeout=300, stream=True)
-                
-                # Check for HTTP errors before processing
-                if response.status_code == 500:
-                    # Server error - provide helpful message
-                    error_msg = (
-                        f"Server error (500) from REST endpoint.\n\n"
-                        f"The server is unable to process this request. This may be due to:\n"
-                        f"  - Requested area is too large\n"
-                        f"  - Server is temporarily unavailable\n"
-                        f"  - Request parameters are invalid\n\n"
-                        f"Try:\n"
-                        f"  - Selecting a smaller area\n"
-                        f"  - Using a larger cell size (8m or 16m)\n"
-                        f"  - Waiting a few moments and trying again\n\n"
-                        f"Requested size: {width}x{height} pixels"
-                    )
-                    self.error.emit(error_msg)
+                if self.cancelled:
                     return
+                    
+                # Download raw data (no raster function for raw values)
+                # Try multiple approaches to get raw data
                 
-                response.raise_for_status()
+                url = f"{self.base_url}/exportImage"
                 
-                # Check if we got a TIFF
-                content_type = response.headers.get('Content-Type', '')
-                if 'tiff' in content_type.lower() or response.content[:4] == b'II*\x00' or response.content[:4] == b'MM\x00*':
-                    # We got a TIFF, try to read it with rasterio
-                    try:
-                        with rasterio.open(BytesIO(response.content)) as src:
-                            img_array = src.read(1).astype(np.float32)
-                            # Preserve NoData value from source
-                            if src.nodata is not None:
-                                source_nodata = float(src.nodata)
-                                # Mask NoData values
-                                img_array = np.where(img_array == source_nodata, np.nan, img_array)
-                            # Use the transform and CRS from the downloaded TIFF if available
-                            if hasattr(src, 'transform') and src.transform:
-                                transform = src.transform
-                            if hasattr(src, 'crs') and src.crs:
-                                downloaded_crs = src.crs
-                    except Exception as e:
-                        self.status.emit(f"Could not read TIFF with rasterio: {e}. Trying PIL...")
-                        # Fall back to PIL
-                        img = Image.open(BytesIO(response.content))
-                        img_array = np.array(img, dtype=np.float32)
-                else:
-                    # Not a TIFF, try as image
-                    img = Image.open(BytesIO(response.content))
-                    if img.mode in ('RGB', 'RGBA'):
-                        # If we got a colored image, we might need to use pixelBlock
-                        # For now, convert to grayscale and warn
-                        self.status.emit("Warning: Received RGB image. Using grayscale conversion.")
-                        img_array = np.array(img.convert('L'), dtype=np.float32)
-                    else:
-                        img_array = np.array(img, dtype=np.float32)
-                        
-            except requests.exceptions.HTTPError as e:
-                # HTTP error (4xx, 5xx)
-                if hasattr(e.response, 'status_code'):
-                    if e.response.status_code == 500:
+                # First, try to get raw TIFF data
+                params = {
+                    "bbox": f"{xmin},{ymin},{xmax},{ymax}",
+                    "size": f"{width},{height}",
+                    "format": "tiff",
+                    "f": "image",
+                    "noData": "true",
+                    "interpolation": "RSP_BilinearInterpolation"
+                }
+                
+                # Don't specify rasterFunction to get raw values
+                # The service should return raw F32 values
+                
+                self.progress.emit(30)
+                self.status.emit("Downloading data...")
+                
+                if self.cancelled:
+                    return
+                    
+                img_array = None
+                source_nodata = None
+                transform = None
+                downloaded_crs = None
+                
+                try:
+                    response = requests.get(url, params=params, timeout=300, stream=True)
+                    
+                    # Check for HTTP errors before processing
+                    if response.status_code == 500:
+                        # Server error - provide helpful message
                         error_msg = (
                             f"Server error (500) from REST endpoint.\n\n"
                             f"The server is unable to process this request. This may be due to:\n"
@@ -169,35 +129,89 @@ class BathymetryDownloader(QThread):
                             f"  - Waiting a few moments and trying again\n\n"
                             f"Requested size: {width}x{height} pixels"
                         )
-                    else:
-                        error_msg = f"HTTP error {e.response.status_code} from REST endpoint: {str(e)}"
-                else:
-                    error_msg = f"HTTP error from REST endpoint: {str(e)}"
-                self.error.emit(error_msg)
-                return
-            except requests.exceptions.RequestException as e:
-                # Connection or network error
-                error_msg = f"Network error connecting to REST endpoint: {str(e)}"
-                self.error.emit(error_msg)
-                return
-            except Exception as e:
-                self.status.emit(f"Error with TIFF format: {e}. Trying PNG format...")
-                # Fall back to PNG
-                try:
-                    params["format"] = "png"
-                    response = requests.get(url, params=params, timeout=300, stream=True)
+                        self.error.emit(error_msg)
+                        return
+                    
                     response.raise_for_status()
                     
-                    img = Image.open(BytesIO(response.content))
-                    if img.mode in ('RGB', 'RGBA'):
-                        self.status.emit("Warning: Received RGB PNG. Using grayscale conversion.")
-                        img_array = np.array(img.convert('L'), dtype=np.float32)
+                    # Check if we got a TIFF
+                    content_type = response.headers.get('Content-Type', '')
+                    if 'tiff' in content_type.lower() or response.content[:4] == b'II*\x00' or response.content[:4] == b'MM\x00*':
+                        # We got a TIFF, try to read it with rasterio
+                        try:
+                            with rasterio.open(BytesIO(response.content)) as src:
+                                img_array = src.read(1).astype(np.float32)
+                                # Preserve NoData value from source
+                                if src.nodata is not None:
+                                    source_nodata = float(src.nodata)
+                                    # Mask NoData values
+                                    img_array = np.where(img_array == source_nodata, np.nan, img_array)
+                                # Use the transform and CRS from the downloaded TIFF if available
+                                if hasattr(src, 'transform') and src.transform:
+                                    transform = src.transform
+                                if hasattr(src, 'crs') and src.crs:
+                                    downloaded_crs = src.crs
+                        except Exception as e:
+                            self.status.emit(f"Could not read TIFF with rasterio: {e}. Trying PIL...")
+                            # Fall back to PIL
+                            img = Image.open(BytesIO(response.content))
+                            img_array = np.array(img, dtype=np.float32)
                     else:
-                        img_array = np.array(img, dtype=np.float32)
-                except Exception as e2:
-                    error_msg = f"Failed to download data: {str(e2)}"
+                        # Not a TIFF, try as image
+                        img = Image.open(BytesIO(response.content))
+                        if img.mode in ('RGB', 'RGBA'):
+                            # If we got a colored image, we might need to use pixelBlock
+                            # For now, convert to grayscale and warn
+                            self.status.emit("Warning: Received RGB image. Using grayscale conversion.")
+                            img_array = np.array(img.convert('L'), dtype=np.float32)
+                        else:
+                            img_array = np.array(img, dtype=np.float32)
+                        
+                except requests.exceptions.HTTPError as e:
+                    # HTTP error (4xx, 5xx)
+                    if hasattr(e.response, 'status_code'):
+                        if e.response.status_code == 500:
+                            error_msg = (
+                                f"Server error (500) from REST endpoint.\n\n"
+                                f"The server is unable to process this request. This may be due to:\n"
+                                f"  - Requested area is too large\n"
+                                f"  - Server is temporarily unavailable\n"
+                                f"  - Request parameters are invalid\n\n"
+                                f"Try:\n"
+                                f"  - Selecting a smaller area\n"
+                                f"  - Using a larger cell size (8m or 16m)\n"
+                                f"  - Waiting a few moments and trying again\n\n"
+                                f"Requested size: {width}x{height} pixels"
+                            )
+                        else:
+                            error_msg = f"HTTP error {e.response.status_code} from REST endpoint: {str(e)}"
+                    else:
+                        error_msg = f"HTTP error from REST endpoint: {str(e)}"
                     self.error.emit(error_msg)
                     return
+                except requests.exceptions.RequestException as e:
+                    # Connection or network error
+                    error_msg = f"Network error connecting to REST endpoint: {str(e)}"
+                    self.error.emit(error_msg)
+                    return
+                except Exception as e:
+                    self.status.emit(f"Error with TIFF format: {e}. Trying PNG format...")
+                    # Fall back to PNG
+                    try:
+                        params["format"] = "png"
+                        response = requests.get(url, params=params, timeout=300, stream=True)
+                        response.raise_for_status()
+                        
+                        img = Image.open(BytesIO(response.content))
+                        if img.mode in ('RGB', 'RGBA'):
+                            self.status.emit("Warning: Received RGB PNG. Using grayscale conversion.")
+                            img_array = np.array(img.convert('L'), dtype=np.float32)
+                        else:
+                            img_array = np.array(img, dtype=np.float32)
+                    except Exception as e2:
+                        error_msg = f"Failed to download data: {str(e2)}"
+                        self.error.emit(error_msg)
+                        return
                 
             # For now, if we got a PNG, we don't have the actual bathymetry values
             # We need to use the pixelBlock operation or exportImage with proper format
@@ -334,4 +348,153 @@ class BathymetryDownloader(QThread):
             self.error.emit(f"Error: {str(e)}")
             import traceback
             traceback.print_exc()
+    
+    def _download_tiled(self, xmin, ymin, xmax, ymax, total_width, total_height):
+        """Download data in tiles and reassemble.
+        
+        Returns:
+            tuple: (img_array, source_nodata, transform, downloaded_crs)
+        """
+        # Calculate tile grid
+        tiles_x = int(np.ceil(total_width / self.tile_max_size))
+        tiles_y = int(np.ceil(total_height / self.tile_max_size))
+        total_tiles = tiles_x * tiles_y
+        
+        self.status.emit(f"Downloading {total_tiles} tiles ({tiles_x}x{tiles_y})...")
+        self.progress.emit(10)
+        
+        # Calculate pixel size in world coordinates
+        pixel_size_x = (xmax - xmin) / total_width
+        pixel_size_y = (ymax - ymin) / total_height
+        
+        # Initialize output array
+        img_array = np.full((total_height, total_width), np.nan, dtype=np.float32)
+        source_nodata = None
+        transform = None
+        downloaded_crs = None
+        
+        tile_num = 0
+        
+        for tile_y in range(tiles_y):
+            for tile_x in range(tiles_x):
+                if self.cancelled:
+                    return None, None, None, None
+                
+                tile_num += 1
+                progress = 10 + int(80 * tile_num / total_tiles)
+                self.progress.emit(progress)
+                self.status.emit(f"Downloading tile {tile_num}/{total_tiles}...")
+                
+                # Calculate tile bounds in pixels
+                # Add overlap to ensure no gaps
+                tile_start_x = tile_x * self.tile_max_size
+                tile_start_y = tile_y * self.tile_max_size
+                tile_end_x = min(tile_start_x + self.tile_max_size, total_width)
+                tile_end_y = min(tile_start_y + self.tile_max_size, total_height)
+                
+                # Add overlap (extend bounds)
+                overlap_start_x = max(0, tile_start_x - self.tile_overlap)
+                overlap_start_y = max(0, tile_start_y - self.tile_overlap)
+                overlap_end_x = min(total_width, tile_end_x + self.tile_overlap)
+                overlap_end_y = min(total_height, tile_end_y + self.tile_overlap)
+                
+                # Calculate world bounds for this tile
+                tile_xmin = xmin + overlap_start_x * pixel_size_x
+                tile_ymin = ymin + (total_height - overlap_end_y) * pixel_size_y  # Y is inverted
+                tile_xmax = xmin + overlap_end_x * pixel_size_x
+                tile_ymax = ymin + (total_height - overlap_start_y) * pixel_size_y
+                
+                tile_width = overlap_end_x - overlap_start_x
+                tile_height = overlap_end_y - overlap_start_y
+                
+                # Download this tile
+                url = f"{self.base_url}/exportImage"
+                params = {
+                    "bbox": f"{tile_xmin},{tile_ymin},{tile_xmax},{tile_ymax}",
+                    "size": f"{tile_width},{tile_height}",
+                    "format": "tiff",
+                    "f": "image",
+                    "noData": "true",
+                    "interpolation": "RSP_BilinearInterpolation"
+                }
+                
+                try:
+                    response = requests.get(url, params=params, timeout=300, stream=True)
+                    
+                    if response.status_code == 500:
+                        error_msg = f"Server error (500) downloading tile {tile_num}/{total_tiles}"
+                        self.error.emit(error_msg)
+                        return None, None, None, None
+                    
+                    response.raise_for_status()
+                    
+                    # Read tile data
+                    tile_array = None
+                    content_type = response.headers.get('Content-Type', '')
+                    
+                    if 'tiff' in content_type.lower() or response.content[:4] == b'II*\x00' or response.content[:4] == b'MM\x00*':
+                        try:
+                            with rasterio.open(BytesIO(response.content)) as src:
+                                tile_array = src.read(1).astype(np.float32)
+                                if src.nodata is not None and source_nodata is None:
+                                    source_nodata = float(src.nodata)
+                                tile_array = np.where(tile_array == src.nodata, np.nan, tile_array)
+                                if transform is None and hasattr(src, 'transform') and src.transform:
+                                    transform = src.transform
+                                if downloaded_crs is None and hasattr(src, 'crs') and src.crs:
+                                    downloaded_crs = src.crs
+                        except Exception:
+                            img = Image.open(BytesIO(response.content))
+                            tile_array = np.array(img, dtype=np.float32)
+                    else:
+                        img = Image.open(BytesIO(response.content))
+                        if img.mode in ('RGB', 'RGBA'):
+                            tile_array = np.array(img.convert('L'), dtype=np.float32)
+                        else:
+                            tile_array = np.array(img, dtype=np.float32)
+                    
+                    # Determine where to place this tile in the output array
+                    # Account for overlap - use the non-overlap region for placement
+                    output_start_x = tile_start_x
+                    output_start_y = tile_start_y
+                    output_end_x = tile_end_x
+                    output_end_y = tile_end_y
+                    
+                    # Extract the non-overlap region from the tile
+                    tile_offset_x = tile_start_x - overlap_start_x
+                    tile_offset_y = tile_start_y - overlap_start_y
+                    tile_region_x = tile_offset_x
+                    tile_region_y = tile_offset_y
+                    tile_region_width = output_end_x - output_start_x
+                    tile_region_height = output_end_y - output_start_y
+                    
+                    # Place tile data into output array
+                    tile_data = tile_array[tile_region_y:tile_region_y + tile_region_height,
+                                          tile_region_x:tile_region_x + tile_region_width]
+                    
+                    # Handle overlap regions - use average or prefer non-NaN values
+                    output_region = img_array[output_start_y:output_end_y, output_start_x:output_end_x]
+                    
+                    # Combine: prefer non-NaN values, average if both have values
+                    mask_both = ~np.isnan(output_region) & ~np.isnan(tile_data)
+                    mask_new_only = np.isnan(output_region) & ~np.isnan(tile_data)
+                    mask_old_only = ~np.isnan(output_region) & np.isnan(tile_data)
+                    
+                    # Average overlapping regions
+                    combined = output_region.copy()
+                    combined[mask_both] = (output_region[mask_both] + tile_data[mask_both]) / 2.0
+                    combined[mask_new_only] = tile_data[mask_new_only]
+                    # mask_old_only: keep existing values
+                    
+                    img_array[output_start_y:output_end_y, output_start_x:output_end_x] = combined
+                    
+                except Exception as e:
+                    error_msg = f"Error downloading tile {tile_num}/{total_tiles}: {str(e)}"
+                    self.error.emit(error_msg)
+                    return None, None, None, None
+        
+        self.progress.emit(90)
+        self.status.emit("Reassembling tiles...")
+        
+        return img_array, source_nodata, transform, downloaded_crs
 
