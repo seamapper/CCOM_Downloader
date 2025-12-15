@@ -88,9 +88,15 @@ class ServiceInfoLoader(QThread):
                 if name and name != "None":
                     raster_functions.append(name)
             
+            # Extract pixel size
+            pixel_size_x = data.get("pixelSizeX", None)
+            pixel_size_y = data.get("pixelSizeY", None)
+            
             result = {
                 "extent": extent_dict,
-                "raster_functions": raster_functions
+                "raster_functions": raster_functions,
+                "pixel_size_x": pixel_size_x,
+                "pixel_size_y": pixel_size_y
             }
             
             self.loaded.emit(result)
@@ -156,7 +162,7 @@ class MainWindow(QMainWindow):
         
         # Map controls
         map_controls = QHBoxLayout()
-        self.fit_extent_btn = QPushButton("Fit to Extent")
+        self.fit_extent_btn = QPushButton("Zoom to Full Extent")
         self.fit_extent_btn.clicked.connect(self.fit_to_extent)
         self.clear_selection_btn = QPushButton("Clear Selection")
         self.clear_selection_btn.clicked.connect(self.clear_selection)
@@ -340,8 +346,11 @@ class MainWindow(QMainWindow):
         cell_size_row = QHBoxLayout()
         cell_size_row.addWidget(QLabel("Cell Size (m):"))
         self.cell_size_combo = QComboBox()
+        # Initial values will be set when service info loads
+        # For now, use default values as placeholder
         self.cell_size_combo.addItems(["4", "8", "16"])
-        self.cell_size_combo.setCurrentText("4")  # Default to 4m
+        self.cell_size_combo.setCurrentText("4")  # Default to first option
+        self.cell_size_combo.setMinimumWidth(100)  # Make dropdown wider
         self.cell_size_combo.currentTextChanged.connect(self.on_cell_size_changed)
         cell_size_row.addWidget(self.cell_size_combo)
         cell_size_row.addStretch()  # Push to left side
@@ -437,6 +446,18 @@ class MainWindow(QMainWindow):
             extent_dict["ymax"]
         )
         self.log_message("Service info loaded successfully")
+        
+        # Update cell size dropdown based on pixel size from service
+        pixel_size_x = service_data.get("pixel_size_x")
+        pixel_size_y = service_data.get("pixel_size_y")
+        if pixel_size_x is not None and pixel_size_y is not None:
+            # Base cell size is the larger of pixelSizeX and pixelSizeY
+            base_cell_size = max(abs(pixel_size_x), abs(pixel_size_y))
+            self.update_cell_size_options(base_cell_size)
+        else:
+            # Fallback to default values if pixel size not available
+            self.log_message("Warning: Pixel size not available from service, using default cell sizes")
+            self.update_cell_size_options(4.0)  # Default to 4m if pixel size unavailable
         
         # Raster function is fixed to "DAR - StdDev - BlueGreen" - no need to update combo box
         
@@ -677,6 +698,43 @@ class MainWindow(QMainWindow):
             self.download_btn.setEnabled(False)
             if self.map_widget:
                 self.map_widget.set_selection_validity(True)  # Default to valid on error
+    
+    def update_cell_size_options(self, base_cell_size):
+        """Update cell size dropdown options based on base cell size from service.
+        
+        Args:
+            base_cell_size: The base cell size (max of pixelSizeX and pixelSizeY)
+        """
+        if not hasattr(self, 'cell_size_combo'):
+            return
+        
+        # Calculate the three options: base, 2x, 3x
+        option1 = base_cell_size
+        option2 = base_cell_size * 2
+        option3 = base_cell_size * 3
+        
+        # Store current selection if exists
+        current_text = self.cell_size_combo.currentText()
+        
+        # Clear and repopulate dropdown
+        self.cell_size_combo.clear()
+        self.cell_size_combo.addItems([f"{option1:.1f}", f"{option2:.1f}", f"{option3:.1f}"])
+        
+        # Try to restore previous selection if it matches one of the new options
+        # Otherwise, select the first (smallest) option
+        try:
+            current_value = float(current_text)
+            # Find closest match
+            options = [option1, option2, option3]
+            closest_idx = min(range(len(options)), key=lambda i: abs(options[i] - current_value))
+            self.cell_size_combo.setCurrentIndex(closest_idx)
+        except (ValueError, TypeError):
+            # If previous selection was invalid, default to first option
+            self.cell_size_combo.setCurrentIndex(0)
+        
+        # Update pixel count if selection exists
+        if hasattr(self, 'selected_bbox') and self.selected_bbox:
+            self.update_pixel_count_display()
     
     def on_cell_size_changed(self, cell_size_text):
         """Handle cell size change - update pixel count if selection exists."""

@@ -183,6 +183,8 @@ class MapWidget(QWidget):
         self.is_selecting = False
         self.is_panning = False
         self.pan_start = None
+        self.pan_origin = None  # Track original pan start position for drawing pan line
+        self.pan_end = None  # Track current pan position for drawing pan line
         self.raster_function = raster_function
         self.hillshade_raster_function = hillshade_raster_function  # Raster function for hillshade layer
         self.map_loaded = False
@@ -619,6 +621,8 @@ class MapWidget(QWidget):
             # Middle button for panning
             self.is_panning = True
             self.pan_start = event.position().toPoint()
+            self.pan_origin = event.position().toPoint()  # Store original position for pan line
+            self.pan_end = event.position().toPoint()  # Initialize pan_end
             self.update()
             
     def mouseMoveEvent(self, event):
@@ -632,6 +636,7 @@ class MapWidget(QWidget):
         elif self.is_panning and self.pan_start:
             # Calculate pan delta
             current_pos = event.position().toPoint()
+            self.pan_end = current_pos  # Track current position for pan line
             delta = current_pos - self.pan_start
             
             # Convert screen delta to world delta
@@ -658,6 +663,9 @@ class MapWidget(QWidget):
                 if hasattr(self, '_requested_extent'):
                     self._requested_extent = None
                 self.clear_selection()
+                
+                # Update display to show pan line
+                self.update()
                 
                 # Debounce: Cancel any pending load and schedule a new one after a delay
                 if self._load_timer:
@@ -689,9 +697,15 @@ class MapWidget(QWidget):
             elif self.is_panning:
                 self.is_panning = False
                 self.pan_start = None
+                self.pan_origin = None
+                self.pan_end = None
+                self.update()  # Clear pan line
         elif event.button() == Qt.MouseButton.MiddleButton and self.is_panning:
             self.is_panning = False
             self.pan_start = None
+            self.pan_origin = None
+            self.pan_end = None
+            self.update()  # Clear pan line
             
     def wheelEvent(self, event):
         """Handle mouse wheel for zooming."""
@@ -832,4 +846,10 @@ class MapWidget(QWidget):
             painter.setPen(pen)
             painter.setBrush(brush)
             painter.drawRect(selection_rect)
+        
+        # Draw pan line (red line showing pan direction and distance)
+        if self.is_panning and self.pan_origin and self.pan_end:
+            pen = QPen(QColor(255, 0, 0), 2, Qt.PenStyle.DashLine)  # Red dashed line
+            painter.setPen(pen)
+            painter.drawLine(self.pan_origin, self.pan_end)
 
