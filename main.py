@@ -26,7 +26,8 @@ All rights reserved.
 See LICENSE file for full license text.
 """
 
-__version__ = "2025.1"
+# __version__ = "2025.1" # First Release of the program
+__version__ = "2025.2" # Fixed area selection, added data source selection, added tile download option
 
 import sys
 import os
@@ -138,6 +139,7 @@ class MainWindow(QMainWindow):
         self._updating_coordinates = False  # Flag to prevent recursive updates
         self.output_directory = None  # Store selected output directory
         self.config_file = "ccom_downloader_config.json"  # Config file path
+        self._data_source_changing = False  # Flag to track when data source is changing
         
         self.init_ui()
         self.load_config()  # Load saved output directory
@@ -185,11 +187,6 @@ class MainWindow(QMainWindow):
         self.hillshade_checkbox.setChecked(True)  # On by default
         self.hillshade_checkbox.stateChanged.connect(self.on_hillshade_toggled)
         basemap_controls.addWidget(self.hillshade_checkbox)
-        
-        self.blend_checkbox = QCheckBox("Use Overlay Blend")
-        self.blend_checkbox.setChecked(True)  # On by default
-        self.blend_checkbox.stateChanged.connect(self.on_blend_toggled)
-        basemap_controls.addWidget(self.blend_checkbox)
         
         basemap_controls.addWidget(QLabel("Opacity:"))
         self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
@@ -331,7 +328,7 @@ class MainWindow(QMainWindow):
         selection_main_layout.addLayout(selection_coords_layout)
         
         # Pixel count display at the bottom
-        self.pixel_count_label = QLabel("Expected pixels: --")
+        self.pixel_count_label = QLabel("Pixels: --")
         self.pixel_count_label.setStyleSheet("font-weight: bold; padding: 5px;")
         selection_main_layout.addWidget(self.pixel_count_label)
         
@@ -462,11 +459,15 @@ class MainWindow(QMainWindow):
         if pixel_size_x is not None and pixel_size_y is not None:
             # Base cell size is the larger of pixelSizeX and pixelSizeY
             base_cell_size = max(abs(pixel_size_x), abs(pixel_size_y))
-            self.update_cell_size_options(base_cell_size)
+            # Force highest resolution when data source is changing
+            self.update_cell_size_options(base_cell_size, force_highest_resolution=self._data_source_changing)
         else:
             # Fallback to default values if pixel size not available
             self.log_message("Warning: Pixel size not available from service, using default cell sizes")
-            self.update_cell_size_options(4.0)  # Default to 4m if pixel size unavailable
+            self.update_cell_size_options(4.0, force_highest_resolution=self._data_source_changing)  # Default to 4m if pixel size unavailable
+        
+        # Reset flag after updating cell size options
+        self._data_source_changing = False
         
         # Raster function is fixed to "DAR - StdDev - BlueGreen" - no need to update combo box
         
@@ -633,7 +634,8 @@ class MainWindow(QMainWindow):
                 hillshade_raster_function = self.data_sources[self.current_data_source]["hillshade_raster_function"]
                 show_basemap = self.basemap_checkbox.isChecked() if hasattr(self, 'basemap_checkbox') else True
                 show_hillshade = self.hillshade_checkbox.isChecked() if hasattr(self, 'hillshade_checkbox') else True
-                use_blend = self.blend_checkbox.isChecked() if hasattr(self, 'blend_checkbox') else True
+                # Blend mode is automatically enabled when hillshade is enabled
+                use_blend = show_hillshade
                 initial_opacity = self.opacity_slider.value() / 100.0 if hasattr(self, 'opacity_slider') else 1.0
                 self.log_message(f"Creating MapWidget with extent: {self.service_extent}, raster function: {raster_function}, show_basemap: {show_basemap}, show_hillshade: {show_hillshade}, use_blend: {use_blend}")
                 self.map_widget = MapWidget(self.base_url, self.service_extent, raster_function=raster_function, show_basemap=show_basemap, show_hillshade=show_hillshade, use_blend=use_blend, hillshade_raster_function=hillshade_raster_function)
@@ -677,16 +679,28 @@ class MainWindow(QMainWindow):
             self.log_message("ERROR: map_widget is None when trying to trigger load")
             
     def fit_to_extent(self):
-        """Fit map to full service extent."""
+        """Fit map to full service extent - same as initial load with padding."""
         if self.map_widget and self.service_extent:
-            self.map_widget.extent = self.service_extent
-            self.map_widget.clear_selection()
-            self.map_widget.load_map()
+            # Use zoom_to_selection to zoom to service extent with padding (same as initial load)
+            # This ensures the same behavior as the initial load: adds 5% padding and adjusts for widget aspect ratio
+            self.map_widget.selected_bbox_world = self.service_extent
+            self.map_widget.set_selection_validity(True)
+            self.selected_bbox = self.service_extent
+            self.map_widget.service_extent = self.service_extent
+            # Use zoom_to_selection which will add padding and reload the map
+            self.zoom_to_selection(*self.service_extent)
+            # Update coordinate display to show the service extent
+            self.update_coordinate_display(*self.service_extent, update_map=False)
             
     def clear_selection(self):
         """Clear the map selection."""
         if self.map_widget:
             self.map_widget.clear_selection()
+        # Remove bold formatting from download button when selection is cleared
+        if hasattr(self, 'download_btn'):
+            font = self.download_btn.font()
+            font.setBold(False)
+            self.download_btn.setFont(font)
             
     # Raster function is fixed to "DAR - StdDev - BlueGreen" - no handler needed
             
@@ -707,20 +721,14 @@ class MainWindow(QMainWindow):
         if self.map_widget:
             show_hillshade = (state == Qt.CheckState.Checked.value or state == 2)
             self.map_widget.show_hillshade = show_hillshade
+            # Automatically enable/disable blend mode based on hillshade state
+            self.map_widget.use_blend = show_hillshade
             if show_hillshade:
                 # Reload map to get hillshade layer
                 self.map_widget.load_map()
             else:
-                # Just update display
+                # Just update display (blend will be off automatically)
                 self.map_widget.update()
-                
-    def on_blend_toggled(self, state):
-        """Handle blend mode checkbox toggle."""
-        if self.map_widget:
-            use_blend = (state == Qt.CheckState.Checked.value or state == 2)
-            self.map_widget.use_blend = use_blend
-            # Just update display (no need to reload map)
-            self.map_widget.update()
                 
     def on_opacity_changed(self, value):
         """Handle opacity slider change."""
@@ -741,6 +749,10 @@ class MainWindow(QMainWindow):
         if not bbox:
             # No selection - disable button and clear selection validity
             self.download_btn.setEnabled(False)
+            # Remove bold formatting when no selection
+            font = self.download_btn.font()
+            font.setBold(False)
+            self.download_btn.setFont(font)
             if self.map_widget:
                 self.map_widget.set_selection_validity(True)  # Default to valid (no selection shown)
             return
@@ -764,44 +776,68 @@ class MainWindow(QMainWindow):
             
             # Always enable download button (size limit removed with tiling support)
             self.download_btn.setEnabled(True)
+            # Make text bold only if this is a user manual selection (not initial dataset bounds)
+            # Check if selection matches service extent (initial dataset bounds)
+            is_initial_bounds = False
+            if hasattr(self, 'service_extent') and self.service_extent:
+                se = self.service_extent
+                # Use tolerance for floating point comparison
+                tol = 0.1  # 0.1 meter tolerance
+                if (abs(se[0] - xmin) < tol and abs(se[1] - ymin) < tol and
+                    abs(se[2] - xmax) < tol and abs(se[3] - ymax) < tol):
+                    is_initial_bounds = True
+            
+            # Only make bold if it's NOT the initial dataset bounds
+            font = self.download_btn.font()
+            font.setBold(not is_initial_bounds)
+            self.download_btn.setFont(font)
         except Exception:
             # Error calculating - disable button to be safe
             self.download_btn.setEnabled(False)
+            # Remove bold formatting on error
+            font = self.download_btn.font()
+            font.setBold(False)
+            self.download_btn.setFont(font)
             if self.map_widget:
                 self.map_widget.set_selection_validity(True)  # Default to valid on error
     
-    def update_cell_size_options(self, base_cell_size):
+    def update_cell_size_options(self, base_cell_size, force_highest_resolution=False):
         """Update cell size dropdown options based on base cell size from service.
         
         Args:
             base_cell_size: The base cell size (max of pixelSizeX and pixelSizeY)
+            force_highest_resolution: If True, always select the highest resolution (smallest cell size)
         """
         if not hasattr(self, 'cell_size_combo'):
             return
         
         # Calculate the three options: base, 2x, 3x
-        option1 = base_cell_size
+        option1 = base_cell_size  # Highest resolution (smallest cell size)
         option2 = base_cell_size * 2
         option3 = base_cell_size * 3
         
-        # Store current selection if exists
-        current_text = self.cell_size_combo.currentText()
+        # Store current selection if exists (only if not forcing highest resolution)
+        current_text = self.cell_size_combo.currentText() if not force_highest_resolution else None
         
         # Clear and repopulate dropdown
         self.cell_size_combo.clear()
         self.cell_size_combo.addItems([f"{option1:.1f}", f"{option2:.1f}", f"{option3:.1f}"])
         
-        # Try to restore previous selection if it matches one of the new options
-        # Otherwise, select the first (smallest) option
-        try:
-            current_value = float(current_text)
-            # Find closest match
-            options = [option1, option2, option3]
-            closest_idx = min(range(len(options)), key=lambda i: abs(options[i] - current_value))
-            self.cell_size_combo.setCurrentIndex(closest_idx)
-        except (ValueError, TypeError):
-            # If previous selection was invalid, default to first option
+        if force_highest_resolution:
+            # Always select the highest resolution (first option, smallest cell size)
             self.cell_size_combo.setCurrentIndex(0)
+        else:
+            # Try to restore previous selection if it matches one of the new options
+            # Otherwise, select the first (smallest) option
+            try:
+                current_value = float(current_text)
+                # Find closest match
+                options = [option1, option2, option3]
+                closest_idx = min(range(len(options)), key=lambda i: abs(options[i] - current_value))
+                self.cell_size_combo.setCurrentIndex(closest_idx)
+            except (ValueError, TypeError):
+                # If previous selection was invalid, default to first option
+                self.cell_size_combo.setCurrentIndex(0)
         
         # Update pixel count if selection exists
         if hasattr(self, 'selected_bbox') and self.selected_bbox:
@@ -960,17 +996,17 @@ class MainWindow(QMainWindow):
             if is_large:
                 # Show warning in orange/yellow for large datasets
                 self.pixel_count_label.setText(
-                    f"⚠️ Expected pixels ({cell_size}m): {pixels_width_str} × {pixels_height_str} = {total_pixels_str} "
-                    f"(LARGE DATASET)"
+                    f"⚠️ Pixels ({cell_size}m): {pixels_width_str} × {pixels_height_str} = {total_pixels_str} "
+                    f"(LARGE DATASET!)"
                 )
                 self.pixel_count_label.setStyleSheet("font-weight: bold; padding: 5px; color: orange;")
             else:
                 self.pixel_count_label.setText(
-                    f"Expected pixels ({cell_size}m): {pixels_width_str} × {pixels_height_str} = {total_pixels_str}"
+                    f"Pixels ({cell_size}m): {pixels_width_str} × {pixels_height_str} = {total_pixels_str}"
                 )
                 self.pixel_count_label.setStyleSheet("font-weight: bold; padding: 5px;")
         except Exception as e:
-            self.pixel_count_label.setText("Expected pixels: --")
+            self.pixel_count_label.setText("Pixels: --")
             self.pixel_count_label.setStyleSheet("font-weight: bold; padding: 5px;")
             
     def on_selection_changed(self, xmin, ymin, xmax, ymax):
@@ -985,7 +1021,7 @@ class MainWindow(QMainWindow):
             self.south_edit.clear()
             self.east_edit.clear()
             self.north_edit.clear()
-            self.pixel_count_label.setText("Expected pixels: --")
+            self.pixel_count_label.setText("Pixels: --")
             self.selected_bbox = None
             self.download_btn.setEnabled(False)
         else:
@@ -1205,6 +1241,10 @@ class MainWindow(QMainWindow):
         self.status_label.setText(f"Download complete: {file_path}")
         self.log_message(f"✓ Download complete: {file_path}")
         self.download_btn.setEnabled(True)
+        # Remove bold formatting after download completes
+        font = self.download_btn.font()
+        font.setBold(False)
+        self.download_btn.setFont(font)
         QMessageBox.information(self, "Success", f"GeoTIFF saved to:\n{file_path}")
         
     def on_download_error(self, error_message):
@@ -1212,6 +1252,10 @@ class MainWindow(QMainWindow):
         self.status_label.setText(f"Error: {error_message}")
         self.log_message(f"✗ Error: {error_message}")
         self.download_btn.setEnabled(True)
+        # Remove bold formatting after download error
+        font = self.download_btn.font()
+        font.setBold(False)
+        self.download_btn.setFont(font)
         
         # Check if it's a connection error and show helpful message
         if "connection" in error_message.lower() or "timeout" in error_message.lower() or "network" in error_message.lower() or "rest endpoint" in error_message.lower():
@@ -1499,6 +1543,9 @@ class MainWindow(QMainWindow):
         self.current_data_source = data_source_name
         self.base_url = self.data_sources[data_source_name]["url"]
         self.service_extent = new_service_extent
+        
+        # Set flag to force highest resolution when cell size options are updated
+        self._data_source_changing = True
         
         # Update map widget settings if it exists
         if self.map_widget:

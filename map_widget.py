@@ -876,8 +876,8 @@ class MapWidget(QWidget):
             target_rect = QRect(x, y, basemap_rect.width(), basemap_rect.height())
             painter.drawPixmap(target_rect, self.basemap_pixmap)
         else:
-            # Fill background if no basemap
-            painter.fillRect(self.rect(), QColor(240, 240, 240))
+            # Fill background with black if no basemap (nodata areas will show as black)
+            painter.fillRect(self.rect(), QColor(0, 0, 0))
         
         # Draw hillshade layer (if available) - middle layer (underlay) at full opacity
         if self.show_hillshade and not self.hillshade_pixmap.isNull():
@@ -913,13 +913,13 @@ class MapWidget(QWidget):
             painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
         elif not self.show_basemap:
             # Draw placeholder only if basemap is not shown
-            painter.fillRect(self.rect(), QColor(200, 200, 200))
+            painter.fillRect(self.rect(), QColor(0, 0, 0))  # Black background
             status_text = "Loading map..."
             if hasattr(self, 'loader') and self.loader and self.loader.isRunning():
                 status_text = "Loading map..."
             else:
                 status_text = "No map data available"
-            painter.setPen(QColor(0, 0, 0))
+            painter.setPen(QColor(255, 255, 255))  # White text on black background
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, status_text)
             
         # Draw selection rectangle (always on top)
@@ -998,7 +998,7 @@ class MapWidget(QWidget):
         # Draw active selection rectangle (while dragging)
         if self.selection_start and self.selection_end:
             selection_rect = QRect(self.selection_start, self.selection_end).normalized()
-            pen = QPen(QColor(255, 255, 0), 2, Qt.PenStyle.DashLine)  # Yellow dashed line
+            pen = QPen(QColor(0, 255, 0), 2, Qt.PenStyle.DashLine)  # Green dashed line
             painter.setPen(pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)  # No fill - outline only
             painter.drawRect(selection_rect)
