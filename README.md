@@ -77,10 +77,10 @@ python main.py
 
 ### Running the Executable
 
-A pre-built Windows executable is available in the `dist/` directory:
+A pre-built Windows executable is available in the [GitHub Releases](https://github.com/seamapper/CCOM_Downloader/releases):
 - `CCOM Bathymetry Downloader V2025.2.exe`
 
-Simply double-click the executable to run the application.
+Download the latest release and double-click the executable to run the application.
 
 ### Using the Application
 
