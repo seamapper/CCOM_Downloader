@@ -160,6 +160,7 @@ class MapWidget(QWidget):
     selectionChanged = pyqtSignal(float, float, float, float)  # xmin, ymin, xmax, ymax
     selectionCompleted = pyqtSignal(float, float, float, float)  # xmin, ymin, xmax, ymax - emitted when selection is finished
     mapFirstLoaded = pyqtSignal()  # Emitted when map is successfully loaded for the first time
+    statusMessage = pyqtSignal(str)  # Emit status/log messages
     
     def set_selection_validity(self, is_valid):
         """Set whether the current selection is within size limits."""
@@ -311,6 +312,29 @@ class MapWidget(QWidget):
         
         # Use widget size to fill the window completely
         size = (widget_width, widget_height)
+        
+        # Determine raster function based on display size for Hi Resolution service
+        # Check if this is the Hi Resolution service by checking the base_url
+        is_hi_resolution = "WGOM_LI_SNE_BTY_4m" in self.base_url
+        if is_hi_resolution:
+            # Use "Shaded Relief - BlueGreen- MD Hillshade 2" for areas > 4000 pixels in either dimension
+            # Use "DAR - StdDev - BlueGreen" for smaller areas
+            if widget_width > 4000 or widget_height > 4000:
+                new_raster_function = "Shaded Relief - BlueGreen- MD Hillshade 2"
+            else:
+                new_raster_function = "DAR - StdDev - BlueGreen"
+            
+            # Update raster function if it changed
+            if self.raster_function != new_raster_function:
+                msg = f"Updating raster function based on display size ({widget_width}x{widget_height}): {self.raster_function} -> {new_raster_function}"
+                print(msg)
+                self.statusMessage.emit(msg)
+                self.raster_function = new_raster_function
+        
+        # Always log which raster function is being used
+        raster_info_msg = f"Map display using raster function: {self.raster_function} (display size: {widget_width}x{widget_height} pixels)"
+        print(raster_info_msg)
+        self.statusMessage.emit(raster_info_msg)
         
         print(f"Starting map load with extent: {requested_extent}, size: {size}")
         print(f"Using raster function: {self.raster_function}")
@@ -1008,4 +1032,63 @@ class MapWidget(QWidget):
             pen = QPen(QColor(255, 0, 0), 2, Qt.PenStyle.DashLine)  # Red dashed line
             painter.setPen(pen)
             painter.drawLine(self.pan_origin, self.pan_end)
+        
+        # Draw legend in upper left corner
+        self._draw_legend(painter)
+    
+    def _draw_legend(self, painter):
+        """Draw a legend in the upper left corner showing box color meanings."""
+        if not self.map_loaded:
+            return  # Don't draw legend until map is loaded
+        
+        # Legend configuration
+        margin = 10
+        padding = 8
+        line_height = 20
+        line_width = 30
+        legend_width = 150
+        # Height calculation:
+        # - Top padding: padding
+        # - Item 1: line_height
+        # - Item 2: line_height (text drawn at item_y + line_height - 4)
+        # - Bottom padding: padding + 4 (extra space for text)
+        # Total: 2*padding + 2*line_height + 4
+        legend_height = padding * 2 + line_height * 2 + 4
+        
+        # Position in upper left corner
+        x = margin
+        y = margin
+        
+        # Draw semi-transparent background
+        legend_rect = QRect(x, y, legend_width, legend_height)
+        bg_color = QColor(0, 0, 0, 140)  # Black with 140/255 opacity (~55% opaque)
+        painter.fillRect(legend_rect, bg_color)
+        
+        # Draw border
+        border_pen = QPen(QColor(255, 255, 255), 1)
+        painter.setPen(border_pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRect(legend_rect)
+        
+        # Draw legend items (only Dataset Bounds and Area of Interest)
+        items = [
+            (QColor(255, 255, 0), "Dataset Bounds"),
+            (QColor(0, 255, 0), "Area of Interest")
+        ]
+        
+        start_y = y + padding
+        for i, (color, label) in enumerate(items):
+            item_y = start_y + i * line_height
+            
+            # Draw colored line sample (dashed)
+            line_x = x + padding
+            line_y = item_y + line_height // 2
+            pen = QPen(color, 2, Qt.PenStyle.DashLine)
+            painter.setPen(pen)
+            painter.drawLine(line_x, line_y, line_x + line_width, line_y)
+            
+            # Draw label (text baseline at item_y + line_height - 4 to account for text height)
+            painter.setPen(QColor(255, 255, 255))
+            text_x = line_x + line_width + 8
+            painter.drawText(text_x, item_y + line_height - 4, label)
 

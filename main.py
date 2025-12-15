@@ -168,8 +168,11 @@ class MainWindow(QMainWindow):
         self.fit_extent_btn.clicked.connect(self.fit_to_extent)
         self.clear_selection_btn = QPushButton("Clear Selection")
         self.clear_selection_btn.clicked.connect(self.clear_selection)
+        self.refresh_map_btn = QPushButton("Refresh Map")
+        self.refresh_map_btn.clicked.connect(self.refresh_map)
         map_controls.addWidget(self.fit_extent_btn)
         map_controls.addWidget(self.clear_selection_btn)
+        map_controls.addWidget(self.refresh_map_btn)
         map_controls.addStretch()
         
         # Raster function will be set based on data source
@@ -645,6 +648,7 @@ class MainWindow(QMainWindow):
                 self.map_widget.selectionChanged.connect(self.on_selection_changed)
                 self.map_widget.selectionCompleted.connect(self.on_selection_completed)
                 self.map_widget.mapFirstLoaded.connect(self.on_map_first_loaded)
+                self.map_widget.statusMessage.connect(self.log_message)  # Connect status messages to log
                 layout.addWidget(self.map_widget)
                 self.map_widget.show()
                 # Force UI update
@@ -701,6 +705,14 @@ class MainWindow(QMainWindow):
             font = self.download_btn.font()
             font.setBold(False)
             self.download_btn.setFont(font)
+    
+    def refresh_map(self):
+        """Refresh the map display for the currently shown area."""
+        if self.map_widget:
+            self.log_message("Refreshing map display...")
+            self.map_widget.load_map()
+        else:
+            self.log_message("Warning: Map widget not available for refresh")
             
     # Raster function is fixed to "DAR - StdDev - BlueGreen" - no handler needed
             
