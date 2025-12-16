@@ -12,18 +12,23 @@ A PyQt6-based desktop application for downloading bathymetry data from ArcGIS Im
   - Bathymetry hillshade underlay layer (automatically enables blend mode)
   - Main bathymetry layer with adjustable opacity
   - Automatic blend mode when hillshade is enabled
-- **Raster Function**: Uses "DAR - StdDev - BlueGreen" for consistent visualization
-- **Dynamic Cell Size Selection**: Cell size options automatically adjust based on selected data source (1x, 2x, 3x base resolution)
+- **Dynamic Raster Function Selection**: Automatically selects raster function based on area of interest pixel dimensions
+  - Areas ≤ 4000 pixels (both dimensions): "DAR - StdDev - BlueGreen"
+  - Areas > 4000 pixels (either dimension): "StdDev - BlueGreen"
+- **Dynamic Cell Size Selection**: Cell size options automatically adjust based on selected data source (1x, 2x, 3x, 4x, 5x base resolution)
 - **Coordinate Systems**: Support for EPSG:3857 (Web Mercator) and EPSG:4326 (WGS84)
 - **Coordinate Display**: Real-time display of selected area in both Web Mercator and Geographic (WGS84) coordinates
-- **Pixel Count Display**: Shows expected pixel dimensions based on selected area and cell size
+- **Pixel Count Display**: Shows expected pixel dimensions based on selected area and cell size (displayed in Output Options)
+- **Map Legend**: Legend in upper left corner showing box color meanings
+- **Refresh Map Button**: Refresh the map display for the currently shown area
 - **Tile Download Support**: Automatically tiles large downloads for reliable data retrieval
 - **Automatic Filename Generation**: Default filename includes cell size and timestamp
 - **Visual Feedback**:
   - Yellow dashed box: Dataset bounds
-  - Green dashed box: Valid user selection
+  - Green dashed box: Valid user selection (Area of Interest)
   - Red dashed box: Selection too large
   - Black background: NoData areas when basemap is disabled
+  - Legend: Upper left corner shows box color meanings
 - **Mouse Controls**:
   - Mouse wheel: Zoom in/out (centered on window)
   - Middle-click drag: Pan the map (shows red dashed pan line)
@@ -78,7 +83,7 @@ python main.py
 ### Running the Executable
 
 A pre-built Windows executable is available in the [GitHub Releases](https://github.com/seamapper/CCOM_Downloader/releases):
-- `CCOM Bathymetry Downloader V2025.2.exe`
+- `CCOM Bathymetry Downloader V2025.3.exe`
 
 Download the latest release and double-click the executable to run the application.
 
@@ -90,11 +95,13 @@ Download the latest release and double-click the executable to run the applicati
    - Your selection is shown with a green dashed box while drawing
    - Valid selections remain green; invalid (too large) selections turn red
 3. **Adjust Settings**:
-   - Choose cell size (options vary by data source: 1x, 2x, 3x base resolution)
+   - Choose cell size (options vary by data source: 1x, 2x, 3x, 4x, 5x base resolution)
    - Select output coordinate system (EPSG:3857 or EPSG:4326)
+   - View pixel count in Output Options (shows expected download dimensions)
    - Toggle basemap visibility (when off, NoData areas appear black)
    - Toggle hillshade layer (automatically enables blend mode)
    - Adjust opacity of the main bathymetry layer
+   - Use "Refresh Map" button to reload the current map display
 4. **Download**: Click "Download Selected Area" button (bold when manual selection is active)
    - Enable "Tile Download" for large datasets (recommended, enabled by default)
    - Choose save location if no default output directory is set
@@ -105,18 +112,22 @@ Download the latest release and double-click the executable to run the applicati
 The application supports multiple CCOM ArcGIS ImageServer data sources:
 
 ### WGOM-LI-SNE Hi Resolution
-- **Service URL**: `https://gis.ccom.unh.edu/server/rest/services/WGOM_LI_SNE/WGOM_LI_SNE_BTY_4m_20231005_WMAS_IS/ImageServer`
+- **Service URL**: `https://gis.ccom.unh.edu/server/rest/services/WGOM_LI_SNE/WGOM_LI_SNE_BTY_4m_20231005_WMAS_2_IS/ImageServer`
 - **Base Resolution**: 4m
-- **Raster Function**: DAR - StdDev - BlueGreen
+- **Raster Function**: Dynamic selection based on area pixel dimensions
+  - ≤ 4000 pixels (both dimensions): "DAR - StdDev - BlueGreen"
+  - > 4000 pixels (either dimension): "StdDev - BlueGreen"
 - **Hillshade Function**: Multidirectional Hillshade 3x
 
 ### WGOM-LI-SNE Regional
-- **Service URL**: `https://gis.ccom.unh.edu/server/rest/services/WGOM_LI_SNE/WGOM_LI_SNE_Regional_Bathymetry_16m_WMAS_IS/ImageServer`
+- **Service URL**: `https://gis.ccom.unh.edu/server/rest/services/WGOM_LI_SNE/WGOM_LI_SNE_BTY_20231004_16m_2_WMAS_IS/ImageServer`
 - **Base Resolution**: 16m
-- **Raster Function**: DAR - StdDev - BlueGreen
+- **Raster Function**: Dynamic selection based on area pixel dimensions
+  - ≤ 4000 pixels (both dimensions): "DAR - StdDev - BlueGreen"
+  - > 4000 pixels (either dimension): "StdDev - BlueGreen"
 - **Hillshade Function**: Multidirectional Hillshade 3x
 
-Cell size options automatically adjust based on the selected data source (1x, 2x, 3x the base resolution).
+Cell size options automatically adjust based on the selected data source (1x, 2x, 3x, 4x, 5x the base resolution).
 
 ## Output Format
 
@@ -134,13 +145,13 @@ To build a Windows executable:
 
 ```bash
 pip install pyinstaller
-pyinstaller "CCOM Bathymetry Downloader V2025.2.spec"
+pyinstaller "CCOM Bathymetry Downloader V2025.3.spec"
 ```
 
 Or use the command line:
 
 ```bash
-pyinstaller --onefile --noconsole --icon=media\CCOM.ico --name="CCOM Bathymetry Downloader V2025.2" main.py
+pyinstaller --onefile --noconsole --icon=media\CCOM.ico --name="CCOM Bathymetry Downloader V2025.3" main.py
 ```
 
 The executable will be created in the `dist/` directory.
@@ -262,9 +273,9 @@ To build a macOS application (.app bundle) manually:
        <key>CFBundleName</key>
        <string>CCOM Bathymetry Downloader</string>
        <key>CFBundleVersion</key>
-       <string>2025.2</string>
+       <string>2025.3</string>
        <key>CFBundleShortVersionString</key>
-       <string>2025.2</string>
+       <string>2025.3</string>
        <key>CFBundleIconFile</key>
        <string>CCOM</string>
        <key>NSHighResolutionCapable</key>
@@ -295,10 +306,10 @@ To build a macOS application (.app bundle) manually:
        'plist': {
            'CFBundleName': 'CCOM Bathymetry Downloader',
            'CFBundleDisplayName': 'CCOM Bathymetry Downloader',
-           'CFBundleGetInfoString': 'CCOM Bathymetry Downloader v2025.2',
+           'CFBundleGetInfoString': 'CCOM Bathymetry Downloader v2025.3',
            'CFBundleIdentifier': 'edu.unh.ccom.bathymetry-downloader',
-           'CFBundleVersion': '2025.2',
-           'CFBundleShortVersionString': '2025.2',
+           'CFBundleVersion': '2025.3',
+           'CFBundleShortVersionString': '2025.3',
            'NSHighResolutionCapable': True,
        }
    }
@@ -337,7 +348,7 @@ To create a disk image (.dmg) for distribution:
      --icon "CCOM Bathymetry Downloader.app" 150 190 \
      --hide-extension "CCOM Bathymetry Downloader.app" \
      --app-drop-link 450 190 \
-     "CCOM_Bathymetry_Downloader_V2025.2.dmg" \
+     "CCOM_Bathymetry_Downloader_V2025.3.dmg" \
      "CCOM Bathymetry Downloader.app"
    ```
 
@@ -368,7 +379,7 @@ If you plan to distribute the app outside the Mac App Store:
      --primary-bundle-id "edu.unh.ccom.bathymetry-downloader" \
      --username "your-apple-id@example.com" \
      --password "@keychain:AC_PASSWORD" \
-     --file "CCOM_Bathymetry_Downloader_V2025.2.dmg"
+     --file "CCOM_Bathymetry_Downloader_V2025.3.dmg"
    ```
 
 The executable/app will be created in the `dist/` directory.
@@ -386,11 +397,23 @@ Email: pjohnson@ccom.unh.edu
 
 ## Version
 
-Current version: **2025.2**
+Current version: **2025.3**
 
 ### Version History
 
-**2025.2** (Current)
+**2025.3** (Current)
+- Added dynamic raster function selection based on area pixel dimensions (for both Hi Resolution and Regional)
+- Added Refresh Map button to reload current map display
+- Added legend in upper left corner showing box color meanings
+- Moved pixel count display to Output Options groupbox
+- Added 4x and 5x cell size options to dropdown
+- Fixed pixel size calculation to use actual service pixel sizes
+- Fixed data source switching to properly reload map when URL changes
+- Updated service URLs for both data sources
+- Added green color formatting for raster function status messages in log
+- Removed all debug code
+
+**2025.2**
 - Fixed initial map load bounds and box positioning
 - Added data source selection (multiple datasets)
 - Added tile download option for large datasets
