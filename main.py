@@ -28,7 +28,8 @@ See LICENSE file for full license text.
 
 # __version__ = "2025.1" # First Release of the program
 # __version__ = "2025.2" # Fixed area selection, added data source selection, added tile download option
-__version__ = "2025.3" # Fixed dataset bounds display, added data source selection, added tile download option
+# __version__ = "2025.3" # Fixed dataset bounds display, added data source selection, added tile download option
+__version__ = "2025.4" # Added legend checkbox, added export image button
 
 import sys
 import os
@@ -46,7 +47,7 @@ if getattr(sys, 'frozen', False):
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QLineEdit, QPushButton, 
                              QFileDialog, QComboBox, QProgressBar, QTextEdit,
-                             QGroupBox, QMessageBox, QCheckBox, QSlider)
+                             QGroupBox, QMessageBox, QCheckBox)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from map_widget import MapWidget
 from download_module import BathymetryDownloader
@@ -167,6 +168,24 @@ class MainWindow(QMainWindow):
         
         # Map controls
         map_controls = QHBoxLayout()
+        
+        # Basemap and hillshade checkboxes (on the left)
+        self.basemap_checkbox = QCheckBox("Imagery Basemap")
+        self.basemap_checkbox.setChecked(True)
+        self.basemap_checkbox.stateChanged.connect(self.on_basemap_toggled)
+        map_controls.addWidget(self.basemap_checkbox)
+        
+        self.hillshade_checkbox = QCheckBox("Hillshade")
+        self.hillshade_checkbox.setChecked(True)  # On by default
+        self.hillshade_checkbox.stateChanged.connect(self.on_hillshade_toggled)
+        map_controls.addWidget(self.hillshade_checkbox)
+        
+        self.legend_checkbox = QCheckBox("Legend")
+        self.legend_checkbox.setChecked(False)  # Off by default
+        self.legend_checkbox.stateChanged.connect(self.on_legend_toggled)
+        map_controls.addWidget(self.legend_checkbox)
+        
+        # Buttons (to the right of checkboxes)
         self.fit_extent_btn = QPushButton("Zoom to Full Extent")
         self.fit_extent_btn.clicked.connect(self.fit_to_extent)
         self.clear_selection_btn = QPushButton("Clear Selection")
@@ -181,30 +200,6 @@ class MainWindow(QMainWindow):
         # Raster function will be set based on data source
         
         map_layout.addLayout(map_controls)
-        
-        # Basemap controls
-        basemap_controls = QHBoxLayout()
-        self.basemap_checkbox = QCheckBox("Imagery Basemap")
-        self.basemap_checkbox.setChecked(True)
-        self.basemap_checkbox.stateChanged.connect(self.on_basemap_toggled)
-        basemap_controls.addWidget(self.basemap_checkbox)
-        
-        self.hillshade_checkbox = QCheckBox("Hillshade")
-        self.hillshade_checkbox.setChecked(True)  # On by default
-        self.hillshade_checkbox.stateChanged.connect(self.on_hillshade_toggled)
-        basemap_controls.addWidget(self.hillshade_checkbox)
-        
-        basemap_controls.addWidget(QLabel("Opacity:"))
-        self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
-        self.opacity_slider.setMinimum(0)
-        self.opacity_slider.setMaximum(100)
-        self.opacity_slider.setValue(100)  # 100% opacity by default
-        self.opacity_slider.setMaximumWidth(100)
-        self.opacity_slider.valueChanged.connect(self.on_opacity_changed)
-        basemap_controls.addWidget(self.opacity_slider)
-        basemap_controls.addStretch()
-        
-        map_layout.addLayout(basemap_controls)
         
         # Map widget (will be created after service info is loaded)
         self.map_widget = None
@@ -390,11 +385,18 @@ class MainWindow(QMainWindow):
         
         right_layout.addLayout(output_dir_layout)
         
-        # Download button
+        # Download and Export buttons (side by side)
+        button_layout = QHBoxLayout()
         self.download_btn = QPushButton("Download Selected Area")
         self.download_btn.clicked.connect(self.start_download)
         self.download_btn.setEnabled(False)
-        right_layout.addWidget(self.download_btn)
+        button_layout.addWidget(self.download_btn)
+        
+        self.export_image_btn = QPushButton("Export Image")
+        self.export_image_btn.clicked.connect(self.export_map_image)
+        button_layout.addWidget(self.export_image_btn)
+        
+        right_layout.addLayout(button_layout)
         
         # Tile download checkbox
         self.tile_download_checkbox = QCheckBox("Tile Download")
@@ -661,10 +663,9 @@ class MainWindow(QMainWindow):
                 show_hillshade = self.hillshade_checkbox.isChecked() if hasattr(self, 'hillshade_checkbox') else True
                 # Blend mode is automatically enabled when hillshade is enabled
                 use_blend = show_hillshade
-                initial_opacity = self.opacity_slider.value() / 100.0 if hasattr(self, 'opacity_slider') else 1.0
                 self.log_message(f"Creating MapWidget with extent: {self.service_extent}, raster function: {raster_function}, show_basemap: {show_basemap}, show_hillshade: {show_hillshade}, use_blend: {use_blend}")
                 self.map_widget = MapWidget(self.base_url, self.service_extent, raster_function=raster_function, show_basemap=show_basemap, show_hillshade=show_hillshade, use_blend=use_blend, hillshade_raster_function=hillshade_raster_function)
-                self.map_widget.bathymetry_opacity = initial_opacity
+                self.map_widget.bathymetry_opacity = 1.0  # Full opacity
                 # Store service extent in map widget so it can distinguish dataset bounds from user selection
                 self.map_widget.service_extent = self.service_extent
                 # Store pixel sizes for raster function selection
@@ -738,6 +739,59 @@ class MainWindow(QMainWindow):
             self.map_widget.load_map()
         else:
             self.log_message("Warning: Map widget not available for refresh")
+    
+    def export_map_image(self):
+        """Export the current map display as a PNG image."""
+        if not self.map_widget:
+            self.log_message("Warning: Map widget not available for export")
+            QMessageBox.warning(self, "Export Error", "Map widget not available.")
+            return
+        
+        if not self.map_widget.map_loaded:
+            self.log_message("Warning: Map not loaded yet")
+            QMessageBox.warning(self, "Export Error", "Map is not loaded yet. Please wait for the map to load.")
+            return
+        
+        # Generate default filename with timestamp
+        from datetime import datetime
+        date_time_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+        default_filename = f"CCOM_Map_{date_time_str}.png"
+        
+        # Determine save location
+        if self.output_directory and os.path.isdir(self.output_directory):
+            default_path = os.path.join(self.output_directory, default_filename)
+        else:
+            default_path = default_filename
+        
+        # Prompt for save location
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Map Image",
+            default_path,
+            "PNG Files (*.png);;All Files (*)"
+        )
+        
+        if not file_path:
+            return  # User cancelled
+        
+        try:
+            # Grab the map widget as a pixmap
+            pixmap = self.map_widget.grab()
+            
+            if pixmap.isNull():
+                raise Exception("Failed to capture map widget")
+            
+            # Save to file
+            if not pixmap.save(file_path, "PNG"):
+                raise Exception("Failed to save PNG file")
+            
+            self.log_message(f"✓ Map image exported: {file_path}")
+            QMessageBox.information(self, "Success", f"Map image saved to:\n{file_path}")
+            
+        except Exception as e:
+            error_msg = f"Error exporting map image: {str(e)}"
+            self.log_message(f"✗ {error_msg}")
+            QMessageBox.critical(self, "Export Error", error_msg)
             
     # Raster function is fixed to "DAR - StdDev - BlueGreen" - no handler needed
             
@@ -766,14 +820,15 @@ class MainWindow(QMainWindow):
             else:
                 # Just update display (blend will be off automatically)
                 self.map_widget.update()
-                
-    def on_opacity_changed(self, value):
-        """Handle opacity slider change."""
+    
+    def on_legend_toggled(self, state):
+        """Handle legend checkbox toggle."""
         if self.map_widget:
-            opacity = value / 100.0  # Convert 0-100 to 0.0-1.0
-            self.map_widget.bathymetry_opacity = opacity
-            self.map_widget.update()  # Trigger repaint
-            
+            show_legend = (state == Qt.CheckState.Checked.value or state == 2)
+            self.map_widget.show_legend = show_legend
+            # Just update display (no need to reload map)
+            self.map_widget.update()
+                
     def check_and_update_download_button(self):
         """Check if selection is valid and within size limits, update download button state."""
         # Check if there's a valid selection

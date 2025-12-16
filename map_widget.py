@@ -177,6 +177,7 @@ class MapWidget(QWidget):
         self.hillshade_pixmap = QPixmap()
         self.show_basemap = show_basemap
         self.show_hillshade = show_hillshade
+        self.show_legend = False  # Legend visibility (off by default)
         self.use_blend = use_blend  # Use Multiply blend mode for top layer
         self.bathymetry_opacity = 1.0  # Opacity for bathymetry layer (0.0 to 1.0) - default 100%
         self.selection_start = None
@@ -1007,8 +1008,8 @@ class MapWidget(QWidget):
     
     def _draw_legend(self, painter):
         """Draw a legend in the upper left corner showing box color meanings."""
-        if not self.map_loaded:
-            return  # Don't draw legend until map is loaded
+        if not self.map_loaded or not self.show_legend:
+            return  # Don't draw legend until map is loaded or if legend is disabled
         
         # Legend configuration
         margin = 10
