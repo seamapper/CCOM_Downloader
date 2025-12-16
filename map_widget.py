@@ -201,7 +201,6 @@ class MapWidget(QWidget):
         self._extent_locked = False  # Flag to prevent extent changes during resize
         self._original_pixmap_size = None  # Store original pixmap size before scaling for coordinate conversion
         self._scaled_pixmap_size = None  # Store scaled pixmap size (what's actually drawn)
-        self._debug_world_to_screen = False  # Debug flag for world_to_screen logging
         self._requested_extent = initial_extent  # Initialize to initial extent for accurate coordinate conversion from the start
         print(f"MapWidget initialized with raster function: {self.raster_function}, show_basemap: {self.show_basemap}, show_hillshade: {self.show_hillshade}, use_blend: {self.use_blend}")
         
@@ -336,16 +335,10 @@ class MapWidget(QWidget):
             pixel_size_x = self.pixel_size_x if self.pixel_size_x is not None else default_pixel_size
             pixel_size_y = self.pixel_size_y if self.pixel_size_y is not None else default_pixel_size
             
-            # Debug logging
-            print(f"[DEBUG Raster Function] Service: {'Hi Resolution' if is_hi_resolution else 'Regional'}")
-            print(f"[DEBUG Raster Function] pixel_size_x from service: {self.pixel_size_x}, using: {pixel_size_x}")
-            print(f"[DEBUG Raster Function] pixel_size_y from service: {self.pixel_size_y}, using: {pixel_size_y}")
-            
             # Calculate pixel dimensions in source data
             xmin, ymin, xmax, ymax = area_bbox
             pixels_x = int((xmax - xmin) / abs(pixel_size_x))
             pixels_y = int((ymax - ymin) / abs(pixel_size_y))
-            print(f"[DEBUG Raster Function] Area bbox: {area_bbox}, calculated pixels: {pixels_x}x{pixels_y}")
             
             # Use "StdDev - BlueGreen" for areas > 4000 pixels in either dimension
             # Use "DAR - StdDev - BlueGreen" for areas <= 4000 pixels in both dimensions
@@ -665,19 +658,11 @@ class MapWidget(QWidget):
         screen_x = target_rect.left() + rel_x * target_rect.width()
         screen_y = target_rect.top() + rel_y * target_rect.height()
         
-        # DEBUG: Log conversion details (only when flag is set to avoid spam)
-        if hasattr(self, '_debug_world_to_screen') and self._debug_world_to_screen:
-            print(f"[DEBUG world_to_screen] world=({world_x:.2f}, {world_y:.2f}), extent=({xmin:.2f}, {ymin:.2f}, {xmax:.2f}, {ymax:.2f})")
-            print(f"[DEBUG world_to_screen] rel=({rel_x:.4f}, {rel_y:.4f}), target_rect={target_rect}")
-            print(f"[DEBUG world_to_screen] screen=({screen_x:.1f}, {screen_y:.1f})")
-        
         # Clamp coordinates to widget bounds to prevent drawing outside the widget
         widget_rect = self.rect()
         clamped_x = max(0, min(int(screen_x), widget_rect.width() - 1))
         clamped_y = max(0, min(int(screen_y), widget_rect.height() - 1))
         result = QPoint(clamped_x, clamped_y)
-        if hasattr(self, '_debug_world_to_screen') and self._debug_world_to_screen:
-            print(f"[DEBUG world_to_screen] Returning: {result} (type: {type(result)})")
         return result
         
     def get_selection_bbox(self):
@@ -722,19 +707,6 @@ class MapWidget(QWidget):
         # This ensures coordinate conversion uses the correct extent
         conversion_extent = self._requested_extent if (hasattr(self, '_requested_extent') and self._requested_extent is not None) else self.extent
         
-        # DEBUG: Log conversion details
-        print(f"[DEBUG world_bbox_to_screen_rect] bbox_world: {bbox_world}")
-        print(f"[DEBUG world_bbox_to_screen_rect] current extent: {self.extent}")
-        print(f"[DEBUG world_bbox_to_screen_rect] _requested_extent: {getattr(self, '_requested_extent', None)}")
-        print(f"[DEBUG world_bbox_to_screen_rect] using conversion_extent: {conversion_extent}")
-        print(f"[DEBUG world_bbox_to_screen_rect] widget size: {self.width()}x{self.height()}")
-        if hasattr(self, '_scaled_pixmap_size') and self._scaled_pixmap_size:
-            print(f"[DEBUG world_bbox_to_screen_rect] scaled pixmap size: {self._scaled_pixmap_size}")
-        if hasattr(self, '_original_pixmap_size') and self._original_pixmap_size:
-            print(f"[DEBUG world_bbox_to_screen_rect] original pixmap size: {self._original_pixmap_size}")
-        if not self.current_pixmap.isNull():
-            print(f"[DEBUG world_bbox_to_screen_rect] current pixmap size: {self.current_pixmap.width()}x{self.current_pixmap.height()}")
-        
         # Use conversion_extent directly for coordinate conversion
         # Store original values but don't modify self.extent (world_to_screen will use conversion_extent via parameter)
         original_extent = self.extent
@@ -747,33 +719,14 @@ class MapWidget(QWidget):
         self._requested_extent = conversion_extent
         
         try:
-            # Enable debug logging for world_to_screen
-            self._debug_world_to_screen = True
-            
             # Convert corners to screen coordinates
             # world_to_screen will use self._requested_extent which we just set to conversion_extent
             top_left = self.world_to_screen(xmin, ymax)
             bottom_right = self.world_to_screen(xmax, ymin)
             
-            # Disable debug logging
-            self._debug_world_to_screen = False
-            
-            print(f"[DEBUG world_bbox_to_screen_rect] top_left result: {top_left} (type: {type(top_left)})")
-            print(f"[DEBUG world_bbox_to_screen_rect] bottom_right result: {bottom_right} (type: {type(bottom_right)})")
-            print(f"[DEBUG world_bbox_to_screen_rect] top_left is None: {top_left is None}")
-            print(f"[DEBUG world_bbox_to_screen_rect] bottom_right is None: {bottom_right is None}")
-            
             if top_left is not None and bottom_right is not None:
                 screen_rect = QRect(top_left, bottom_right)
-                print(f"[DEBUG world_bbox_to_screen_rect] screen_rect: {screen_rect} (top_left={top_left}, bottom_right={bottom_right})")
-                print(f"[DEBUG world_bbox_to_screen_rect] screen_rect size: {screen_rect.width()}x{screen_rect.height()}")
                 return screen_rect
-            else:
-                print(f"[DEBUG world_bbox_to_screen_rect] ERROR: top_left or bottom_right is None, cannot create QRect")
-                if top_left is None:
-                    print(f"[DEBUG world_bbox_to_screen_rect] top_left is None!")
-                if bottom_right is None:
-                    print(f"[DEBUG world_bbox_to_screen_rect] bottom_right is None!")
         finally:
             # Restore original extent
             self.extent = original_extent
@@ -998,12 +951,6 @@ class MapWidget(QWidget):
         # First draw the persistent selected bbox if it exists
         # CRITICAL: Only draw if pixmap is loaded and valid to avoid drawing with stale data during resize
         # Also ensure pixmap size matches widget size (or is being scaled correctly)
-        print(f"[DEBUG paintEvent] Checking if box should be drawn:")
-        print(f"[DEBUG paintEvent] selected_bbox_world: {self.selected_bbox_world}")
-        print(f"[DEBUG paintEvent] map_loaded: {self.map_loaded}")
-        print(f"[DEBUG paintEvent] current_pixmap.isNull: {self.current_pixmap.isNull()}")
-        print(f"[DEBUG paintEvent] service_extent: {getattr(self, 'service_extent', None)}")
-        
         if self.selected_bbox_world and self.map_loaded and not self.current_pixmap.isNull():
             # Only draw if pixmap is valid and has been loaded
             # Check that pixmap size is reasonable (not stale)
@@ -1012,13 +959,9 @@ class MapWidget(QWidget):
             widget_width = self.width()
             widget_height = self.height()
             
-            print(f"[DEBUG paintEvent] pixmap size: {pixmap_width}x{pixmap_height}, widget size: {widget_width}x{widget_height}")
-            
             # Only draw if pixmap dimensions are valid (greater than 0)
             if pixmap_width > 0 and pixmap_height > 0:
-                print(f"[DEBUG paintEvent] Calling world_bbox_to_screen_rect with: {self.selected_bbox_world}")
                 bbox_screen = self.world_bbox_to_screen_rect(self.selected_bbox_world)
-                print(f"[DEBUG paintEvent] bbox_screen result: {bbox_screen}")
                 if bbox_screen:
                     # Determine if this is the dataset bounds (service extent) or a user selection
                     # Use approximate comparison due to floating point precision differences
@@ -1032,16 +975,6 @@ class MapWidget(QWidget):
                             abs(se[2] - sb[2]) < tol and abs(se[3] - sb[3]) < tol):
                             is_dataset_bounds = True
                     
-                    print(f"[DEBUG paintEvent] is_dataset_bounds: {is_dataset_bounds}")
-                    print(f"[DEBUG paintEvent] service_extent: {getattr(self, 'service_extent', None)}")
-                    print(f"[DEBUG paintEvent] selected_bbox_world: {self.selected_bbox_world}")
-                    if is_dataset_bounds:
-                        print(f"[DEBUG paintEvent] Drawing YELLOW box (dataset bounds)")
-                    elif self.selection_is_valid:
-                        print(f"[DEBUG paintEvent] Drawing GREEN box (user selection)")
-                    else:
-                        print(f"[DEBUG paintEvent] Drawing RED box (selection too large)")
-                    
                     if is_dataset_bounds:
                         # Dataset bounds - use yellow dashed line (no fill)
                         pen = QPen(QColor(255, 255, 0), 2, Qt.PenStyle.DashLine)  # Yellow dashed line
@@ -1054,18 +987,6 @@ class MapWidget(QWidget):
                     painter.setPen(pen)
                     painter.setBrush(Qt.BrushStyle.NoBrush)  # No fill - outline only
                     painter.drawRect(bbox_screen)
-                    print(f"[DEBUG paintEvent] Box drawn at: {bbox_screen}")
-                else:
-                    print(f"[DEBUG paintEvent] bbox_screen is None - box will not be drawn")
-            else:
-                print(f"[DEBUG paintEvent] Pixmap dimensions invalid: {pixmap_width}x{pixmap_height}")
-        else:
-            if not self.selected_bbox_world:
-                print(f"[DEBUG paintEvent] No selected_bbox_world - box will not be drawn")
-            elif not self.map_loaded:
-                print(f"[DEBUG paintEvent] Map not loaded - box will not be drawn")
-            elif self.current_pixmap.isNull():
-                print(f"[DEBUG paintEvent] Pixmap is null - box will not be drawn")
         
         # Draw active selection rectangle (while dragging)
         if self.selection_start and self.selection_end:

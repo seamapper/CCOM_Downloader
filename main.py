@@ -27,7 +27,8 @@ See LICENSE file for full license text.
 """
 
 # __version__ = "2025.1" # First Release of the program
-__version__ = "2025.2" # Fixed area selection, added data source selection, added tile download option
+# __version__ = "2025.2" # Fixed area selection, added data source selection, added tile download option
+__version__ = "2025.3" # Fixed dataset bounds display, added data source selection, added tile download option
 
 import sys
 import os
@@ -1435,31 +1436,12 @@ class MainWindow(QMainWindow):
     
     def on_map_first_loaded(self):
         """Handle first successful map load - show instructions and set default bounds."""
-        # DEBUG: Log current state
-        self.log_message("=" * 60)
-        self.log_message("DEBUG: on_map_first_loaded called")
-        self.log_message(f"DEBUG: map_widget exists: {self.map_widget is not None}")
-        if self.map_widget:
-            self.log_message(f"DEBUG: selected_bbox_world: {self.map_widget.selected_bbox_world}")
-            self.log_message(f"DEBUG: map_loaded: {self.map_widget.map_loaded}")
-            self.log_message(f"DEBUG: current_pixmap.isNull: {self.map_widget.current_pixmap.isNull()}")
-            self.log_message(f"DEBUG: extent: {self.map_widget.extent}")
-            self.log_message(f"DEBUG: _requested_extent: {getattr(self.map_widget, '_requested_extent', None)}")
-            self.log_message(f"DEBUG: service_extent in map_widget: {getattr(self.map_widget, 'service_extent', None)}")
-        self.log_message(f"DEBUG: service_extent: {self.service_extent}")
-        self.log_message("=" * 60)
-        
         # If no selection exists yet, set default to REST endpoint service extent bounds
         # CRITICAL: Use the REST endpoint extent (service_extent) for the box, NOT the map's displayed extent
         # The map might show a slightly different area due to rounding or basemap coverage,
         # but the box should show the exact bathymetry data bounds from the REST endpoint
         if self.map_widget and self.map_widget.selected_bbox_world is None:
             if self.service_extent:
-                self.log_message("DEBUG: Setting default bounds to REST endpoint service extent (bathymetry data bounds)")
-                self.log_message(f"DEBUG: REST endpoint extent: {self.service_extent}")
-                self.log_message(f"DEBUG: Map widget extent: {self.map_widget.extent}")
-                self.log_message(f"DEBUG: Map widget _requested_extent: {getattr(self.map_widget, '_requested_extent', None)}")
-                
                 # Set default selection to REST endpoint service extent bounds (exact bathymetry data bounds)
                 # This is the correct extent from the REST endpoint, not the map's displayed extent
                 self.map_widget.selected_bbox_world = self.service_extent
@@ -1467,54 +1449,27 @@ class MainWindow(QMainWindow):
                 self.selected_bbox = self.service_extent
                 # Ensure service_extent is stored in map widget (this is the REST endpoint extent)
                 self.map_widget.service_extent = self.service_extent
-                self.log_message(f"DEBUG: Set selected_bbox_world to REST endpoint extent: {self.map_widget.selected_bbox_world}")
-                self.log_message(f"DEBUG: Set service_extent in map_widget to: {self.map_widget.service_extent}")
                 
                 # CRITICAL: Zoom to the REST endpoint bounds using zoom_to_selection
                 # This ensures the map extent is recalculated with padding and the box is positioned correctly
                 # This mimics what happens when the user hits return in a coordinate field
-                self.log_message("DEBUG: Zooming to REST endpoint extent to position box correctly")
                 QTimer.singleShot(300, lambda: self.zoom_to_selection(*self.service_extent))
                 self.log_message("Default selection set to service extent bounds, will zoom to dataset bounds")
-            else:
-                self.log_message("DEBUG: service_extent is None, cannot set default bounds")
-        else:
-            if self.map_widget:
-                self.log_message(f"DEBUG: Skipping default bounds - selected_bbox_world already set: {self.map_widget.selected_bbox_world}")
-            else:
-                self.log_message("DEBUG: Skipping default bounds - map_widget is None")
     
     def _zoom_to_service_extent(self):
         """Zoom to service extent bounds - helper method for delayed zoom."""
-        self.log_message("=" * 60)
-        self.log_message("DEBUG: _zoom_to_service_extent called")
-        self.log_message(f"DEBUG: map_widget exists: {self.map_widget is not None}")
-        self.log_message(f"DEBUG: service_extent: {self.service_extent}")
-        
         if self.map_widget and self.service_extent:
             # Ensure the selected bbox is set to service extent (this is the dataset bounds)
-            self.log_message(f"DEBUG: Setting selected_bbox_world to service_extent: {self.service_extent}")
             self.map_widget.selected_bbox_world = self.service_extent
             self.map_widget.set_selection_validity(True)
             self.selected_bbox = self.service_extent
             # Ensure service extent is stored in map widget for color distinction
             self.map_widget.service_extent = self.service_extent
-            self.log_message(f"DEBUG: Set service_extent in map_widget: {self.map_widget.service_extent}")
-            self.log_message(f"DEBUG: Current extent: {self.map_widget.extent}")
-            self.log_message(f"DEBUG: Current _requested_extent: {getattr(self.map_widget, '_requested_extent', None)}")
             
             # Zoom to the service extent - this will reload the map with the correct extent
-            self.log_message("DEBUG: Calling zoom_to_selection")
             self.zoom_to_selection(*self.service_extent)
             # After zoom completes, the map will reload and the box should be visible
             # The box will be repainted in paintEvent when the new map loads
-            self.log_message("DEBUG: zoom_to_selection completed")
-        else:
-            if not self.map_widget:
-                self.log_message("DEBUG: map_widget is None")
-            if not self.service_extent:
-                self.log_message("DEBUG: service_extent is None")
-        self.log_message("=" * 60)
         
         instructions = [
             "",
