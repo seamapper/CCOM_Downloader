@@ -10,7 +10,7 @@ A PyQt6-based desktop application for downloading bathymetry data from ArcGIS Im
 - **Multiple Layer Support**:
   - World Imagery basemap (optional)
   - Bathymetry hillshade underlay layer (automatically enables blend mode)
-  - Main bathymetry layer with adjustable opacity
+  - Main bathymetry layer
   - Automatic blend mode when hillshade is enabled
 - **Dynamic Raster Function Selection**: Automatically selects raster function based on area of interest pixel dimensions
   - Areas ≤ 4000 pixels (both dimensions): "DAR - StdDev - BlueGreen"
@@ -19,8 +19,9 @@ A PyQt6-based desktop application for downloading bathymetry data from ArcGIS Im
 - **Coordinate Systems**: Support for EPSG:3857 (Web Mercator) and EPSG:4326 (WGS84)
 - **Coordinate Display**: Real-time display of selected area in both Web Mercator and Geographic (WGS84) coordinates
 - **Pixel Count Display**: Shows expected pixel dimensions based on selected area and cell size (displayed in Output Options)
-- **Map Legend**: Legend in upper left corner showing box color meanings
+- **Map Legend**: Toggleable legend in upper left corner showing box color meanings (off by default)
 - **Refresh Map Button**: Refresh the map display for the currently shown area
+- **Export Image Button**: Export the current map display as a PNG image
 - **Tile Download Support**: Automatically tiles large downloads for reliable data retrieval
 - **Automatic Filename Generation**: Default filename includes cell size and timestamp
 - **Visual Feedback**:
@@ -28,7 +29,7 @@ A PyQt6-based desktop application for downloading bathymetry data from ArcGIS Im
   - Green dashed box: Valid user selection (Area of Interest)
   - Red dashed box: Selection too large
   - Black background: NoData areas when basemap is disabled
-  - Legend: Upper left corner shows box color meanings
+  - Toggleable legend: Upper left corner shows box color meanings (can be enabled/disabled)
 - **Mouse Controls**:
   - Mouse wheel: Zoom in/out (centered on window)
   - Middle-click drag: Pan the map (shows red dashed pan line)
@@ -83,7 +84,7 @@ python main.py
 ### Running the Executable
 
 A pre-built Windows executable is available in the [GitHub Releases](https://github.com/seamapper/CCOM_Downloader/releases):
-- `CCOM Bathymetry Downloader V2025.3.exe`
+- `CCOM Bathymetry Downloader V2025.4.exe`
 
 Download the latest release and double-click the executable to run the application.
 
@@ -100,11 +101,13 @@ Download the latest release and double-click the executable to run the applicati
    - View pixel count in Output Options (shows expected download dimensions)
    - Toggle basemap visibility (when off, NoData areas appear black)
    - Toggle hillshade layer (automatically enables blend mode)
-   - Adjust opacity of the main bathymetry layer
+   - Toggle legend visibility (off by default)
    - Use "Refresh Map" button to reload the current map display
-4. **Download**: Click "Download Selected Area" button (bold when manual selection is active)
-   - Enable "Tile Download" for large datasets (recommended, enabled by default)
-   - Choose save location if no default output directory is set
+4. **Download or Export**:
+   - **Download**: Click "Download Selected Area" button (bold when manual selection is active)
+     - Enable "Tile Download" for large datasets (recommended, enabled by default)
+     - Choose save location if no default output directory is set
+   - **Export Image**: Click "Export Image" button to save the current map display as a PNG file
 5. **Save File**: Default filename includes cell size and timestamp
 
 ## Data Sources
@@ -145,13 +148,13 @@ To build a Windows executable:
 
 ```bash
 pip install pyinstaller
-pyinstaller "CCOM Bathymetry Downloader V2025.3.spec"
+pyinstaller "CCOM Bathymetry Downloader V2025.4.spec"
 ```
 
 Or use the command line:
 
 ```bash
-pyinstaller --onefile --noconsole --icon=media\CCOM.ico --name="CCOM Bathymetry Downloader V2025.3" main.py
+pyinstaller --onefile --noconsole --icon=media\CCOM.ico --name="CCOM Bathymetry Downloader V2025.4" main.py
 ```
 
 The executable will be created in the `dist/` directory.
@@ -273,9 +276,9 @@ To build a macOS application (.app bundle) manually:
        <key>CFBundleName</key>
        <string>CCOM Bathymetry Downloader</string>
        <key>CFBundleVersion</key>
-       <string>2025.3</string>
+       <string>2025.4</string>
        <key>CFBundleShortVersionString</key>
-       <string>2025.3</string>
+       <string>2025.4</string>
        <key>CFBundleIconFile</key>
        <string>CCOM</string>
        <key>NSHighResolutionCapable</key>
@@ -306,10 +309,10 @@ To build a macOS application (.app bundle) manually:
        'plist': {
            'CFBundleName': 'CCOM Bathymetry Downloader',
            'CFBundleDisplayName': 'CCOM Bathymetry Downloader',
-           'CFBundleGetInfoString': 'CCOM Bathymetry Downloader v2025.3',
+           'CFBundleGetInfoString': 'CCOM Bathymetry Downloader v2025.4',
            'CFBundleIdentifier': 'edu.unh.ccom.bathymetry-downloader',
-           'CFBundleVersion': '2025.3',
-           'CFBundleShortVersionString': '2025.3',
+           'CFBundleVersion': '2025.4',
+           'CFBundleShortVersionString': '2025.4',
            'NSHighResolutionCapable': True,
        }
    }
@@ -348,7 +351,7 @@ To create a disk image (.dmg) for distribution:
      --icon "CCOM Bathymetry Downloader.app" 150 190 \
      --hide-extension "CCOM Bathymetry Downloader.app" \
      --app-drop-link 450 190 \
-     "CCOM_Bathymetry_Downloader_V2025.3.dmg" \
+     "CCOM_Bathymetry_Downloader_V2025.4.dmg" \
      "CCOM Bathymetry Downloader.app"
    ```
 
@@ -379,7 +382,7 @@ If you plan to distribute the app outside the Mac App Store:
      --primary-bundle-id "edu.unh.ccom.bathymetry-downloader" \
      --username "your-apple-id@example.com" \
      --password "@keychain:AC_PASSWORD" \
-     --file "CCOM_Bathymetry_Downloader_V2025.3.dmg"
+     --file "CCOM_Bathymetry_Downloader_V2025.4.dmg"
    ```
 
 The executable/app will be created in the `dist/` directory.
@@ -397,11 +400,17 @@ Email: pjohnson@ccom.unh.edu
 
 ## Version
 
-Current version: **2025.3**
+Current version: **2025.4**
 
 ### Version History
 
-**2025.3** (Current)
+**2025.4** (Current)
+- Added Export Image button to save current map display as PNG
+- Added Legend checkbox to toggle legend visibility (off by default)
+- Removed opacity slider (bathymetry layer now always at full opacity)
+- Reorganized map controls: checkboxes (Imagery Basemap, Hillshade, Legend) moved to left of buttons
+
+**2025.3**
 - Added dynamic raster function selection based on area pixel dimensions (for both Hi Resolution and Regional)
 - Added Refresh Map button to reload current map display
 - Added legend in upper left corner showing box color meanings
