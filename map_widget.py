@@ -188,6 +188,8 @@ class MapWidget(QWidget):
         self.pan_end = None  # Track current pan position for drawing pan line
         self.raster_function = raster_function
         self.hillshade_raster_function = hillshade_raster_function  # Raster function for hillshade layer
+        self.pixel_size_x = None  # Pixel size in X direction from service (meters)
+        self.pixel_size_y = None  # Pixel size in Y direction from service (meters)
         self.map_loaded = False
         self._first_load_complete = False  # Track if first load has completed
         self._loading = False  # Flag to prevent multiple simultaneous loads
@@ -313,28 +315,74 @@ class MapWidget(QWidget):
         # Use widget size to fill the window completely
         size = (widget_width, widget_height)
         
-        # Determine raster function based on display size for Hi Resolution service
-        # Check if this is the Hi Resolution service by checking the base_url
+        # Determine raster function based on area of interest pixel dimensions in source data
+        # Check if this is the Hi Resolution or Regional service by checking the base_url
         is_hi_resolution = "WGOM_LI_SNE_BTY_4m" in self.base_url
-        if is_hi_resolution:
-            # Use "Shaded Relief - BlueGreen- MD Hillshade 2" for areas > 4000 pixels in either dimension
-            # Use "DAR - StdDev - BlueGreen" for smaller areas
-            if widget_width > 4000 or widget_height > 4000:
-                new_raster_function = "Shaded Relief - BlueGreen- MD Hillshade 2"
+        is_regional = "WGOM_LI_SNE_BTY" in self.base_url and "16m" in self.base_url
+        uses_dynamic_raster_function = is_hi_resolution or is_regional
+        
+        if uses_dynamic_raster_function:
+            # Get the area of interest (selected bbox) or use current extent if no selection
+            area_bbox = self.selected_bbox_world if self.selected_bbox_world else requested_extent
+            
+            # Get pixel size from service (default based on service type if not available)
+            # IMPORTANT: Use actual pixel sizes from service, not defaults, unless they're None
+            if is_hi_resolution:
+                default_pixel_size = 4.0
+            else:  # Regional
+                default_pixel_size = 16.0
+            
+            # Use actual pixel sizes from service if available, otherwise use service-specific default
+            pixel_size_x = self.pixel_size_x if self.pixel_size_x is not None else default_pixel_size
+            pixel_size_y = self.pixel_size_y if self.pixel_size_y is not None else default_pixel_size
+            
+            # Debug logging
+            print(f"[DEBUG Raster Function] Service: {'Hi Resolution' if is_hi_resolution else 'Regional'}")
+            print(f"[DEBUG Raster Function] pixel_size_x from service: {self.pixel_size_x}, using: {pixel_size_x}")
+            print(f"[DEBUG Raster Function] pixel_size_y from service: {self.pixel_size_y}, using: {pixel_size_y}")
+            
+            # Calculate pixel dimensions in source data
+            xmin, ymin, xmax, ymax = area_bbox
+            pixels_x = int((xmax - xmin) / abs(pixel_size_x))
+            pixels_y = int((ymax - ymin) / abs(pixel_size_y))
+            print(f"[DEBUG Raster Function] Area bbox: {area_bbox}, calculated pixels: {pixels_x}x{pixels_y}")
+            
+            # Use "StdDev - BlueGreen" for areas > 4000 pixels in either dimension
+            # Use "DAR - StdDev - BlueGreen" for areas <= 4000 pixels in both dimensions
+            if pixels_x > 4000 or pixels_y > 4000:
+                new_raster_function = "StdDev - BlueGreen"
             else:
                 new_raster_function = "DAR - StdDev - BlueGreen"
             
             # Update raster function if it changed
             if self.raster_function != new_raster_function:
-                msg = f"Updating raster function based on display size ({widget_width}x{widget_height}): {self.raster_function} -> {new_raster_function}"
+                msg = f"Updating raster function based on area of interest size ({pixels_x}x{pixels_y} source pixels): {self.raster_function} -> {new_raster_function}"
                 print(msg)
-                self.statusMessage.emit(msg)
+                # Format message with green color for raster function info
+                green_msg = f'<span style="color: green;">{msg}</span>'
+                self.statusMessage.emit(green_msg)
                 self.raster_function = new_raster_function
         
         # Always log which raster function is being used
-        raster_info_msg = f"Map display using raster function: {self.raster_function} (display size: {widget_width}x{widget_height} pixels)"
+        if uses_dynamic_raster_function and self.selected_bbox_world:
+            area_bbox = self.selected_bbox_world
+            # Get pixel size from service (default based on service type if not available)
+            if is_hi_resolution:
+                default_pixel_size = 4.0
+            else:  # Regional
+                default_pixel_size = 16.0
+            pixel_size_x = self.pixel_size_x if self.pixel_size_x is not None else default_pixel_size
+            pixel_size_y = self.pixel_size_y if self.pixel_size_y is not None else default_pixel_size
+            xmin, ymin, xmax, ymax = area_bbox
+            pixels_x = int((xmax - xmin) / abs(pixel_size_x))
+            pixels_y = int((ymax - ymin) / abs(pixel_size_y))
+            raster_info_msg = f"Map display using raster function: {self.raster_function} (area of interest: {pixels_x}x{pixels_y} source pixels)"
+        else:
+            raster_info_msg = f"Map display using raster function: {self.raster_function}"
         print(raster_info_msg)
-        self.statusMessage.emit(raster_info_msg)
+        # Format message with green color for raster function info
+        green_raster_info_msg = f'<span style="color: green;">{raster_info_msg}</span>'
+        self.statusMessage.emit(green_raster_info_msg)
         
         print(f"Starting map load with extent: {requested_extent}, size: {size}")
         print(f"Using raster function: {self.raster_function}")

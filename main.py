@@ -118,22 +118,24 @@ class MainWindow(QMainWindow):
         # Data source configurations
         self.data_sources = {
             "WGOM-LI-SNE Hi Resolution": {
-                "url": "https://gis.ccom.unh.edu/server/rest/services/WGOM_LI_SNE/WGOM_LI_SNE_BTY_4m_20231005_WMAS_IS/ImageServer",
-                "bathymetry_raster_function": "DAR - StdDev - BlueGreen",
+                "url": "https://gis.ccom.unh.edu/server/rest/services/WGOM_LI_SNE/WGOM_LI_SNE_BTY_4m_20231005_WMAS_2_IS/ImageServer",
+                "bathymetry_raster_function": "StdDev - BlueGreen",
                 "hillshade_raster_function": "Multidirectional Hillshade 3x",
                 "default_extent": (-8254538.5, 4898559.25, -7411670.5, 5636075.25)
             },
             "WGOM-LI-SNE Regional": {
-                "url": "https://gis.ccom.unh.edu/server/rest/services/WGOM_LI_SNE/WGOM_LI_SNE_Regional_Bathymetry_16m_WMAS_IS/ImageServer",
-                "bathymetry_raster_function": "DAR - StdDev - BlueGreen",
+                "url": "https://gis.ccom.unh.edu/server/rest/services/WGOM_LI_SNE/WGOM_LI_SNE_BTY_20231004_16m_2_WMAS_IS/ImageServer",
+                "bathymetry_raster_function": "StdDev - BlueGreen",
                 "hillshade_raster_function": "Multidirectional Hillshade 3x",
-                "default_extent": (-8360732.50001078, 4893599.25001255, -7454540.50001078, 5636591.25001255)
+                "default_extent": ( -8313630.50001078, 4898555.25001255, -7411662.50001078, 5636075.25001255)
             }
         }
         self.current_data_source = "WGOM-LI-SNE Hi Resolution"  # Default data source
         self.base_url = self.data_sources[self.current_data_source]["url"]
         # Use known extent as fallback (will be updated when service info loads)
         self.service_extent = self.data_sources[self.current_data_source]["default_extent"]
+        self.pixel_size_x = None  # Pixel size in X direction from service
+        self.pixel_size_y = None  # Pixel size in Y direction from service
         self.downloader = None
         self.service_loader = None
         self._updating_coordinates = False  # Flag to prevent recursive updates
@@ -330,17 +332,15 @@ class MainWindow(QMainWindow):
         
         selection_main_layout.addLayout(selection_coords_layout)
         
-        # Pixel count display at the bottom
-        self.pixel_count_label = QLabel("Pixels: --")
-        self.pixel_count_label.setStyleSheet("font-weight: bold; padding: 5px;")
-        selection_main_layout.addWidget(self.pixel_count_label)
-        
         selection_group.setLayout(selection_main_layout)
         right_layout.addWidget(selection_group)
         
         # Output options
         output_group = QGroupBox("Output Options")
-        output_layout = QHBoxLayout()  # Horizontal layout for side-by-side placement
+        output_layout = QVBoxLayout()  # Vertical layout to accommodate pixel count at bottom
+        
+        # Top row: Cell size and CRS side by side
+        output_top_layout = QHBoxLayout()
         
         # Left side: Cell size selector (label and dropdown on same line)
         cell_size_row = QHBoxLayout()
@@ -354,7 +354,7 @@ class MainWindow(QMainWindow):
         self.cell_size_combo.currentTextChanged.connect(self.on_cell_size_changed)
         cell_size_row.addWidget(self.cell_size_combo)
         cell_size_row.addStretch()  # Push to left side
-        output_layout.addLayout(cell_size_row)
+        output_top_layout.addLayout(cell_size_row)
         
         # Right side: Output CRS selector (label and dropdown on same line)
         crs_row = QHBoxLayout()
@@ -363,7 +363,14 @@ class MainWindow(QMainWindow):
         self.crs_combo.addItems(["EPSG:3857", "EPSG:4326"])
         crs_row.addWidget(self.crs_combo)
         crs_row.addStretch()  # Push to right side
-        output_layout.addLayout(crs_row)
+        output_top_layout.addLayout(crs_row)
+        
+        output_layout.addLayout(output_top_layout)
+        
+        # Pixel count display at the bottom
+        self.pixel_count_label = QLabel("Pixels: --")
+        self.pixel_count_label.setStyleSheet("font-weight: bold; padding: 5px;")
+        output_layout.addWidget(self.pixel_count_label)
         
         output_group.setLayout(output_layout)
         right_layout.addWidget(output_group)
@@ -459,6 +466,9 @@ class MainWindow(QMainWindow):
         # Update cell size dropdown based on pixel size from service
         pixel_size_x = service_data.get("pixel_size_x")
         pixel_size_y = service_data.get("pixel_size_y")
+        # Store pixel sizes for use in raster function selection
+        self.pixel_size_x = pixel_size_x
+        self.pixel_size_y = pixel_size_y
         if pixel_size_x is not None and pixel_size_y is not None:
             # Base cell size is the larger of pixelSizeX and pixelSizeY
             base_cell_size = max(abs(pixel_size_x), abs(pixel_size_y))
@@ -481,6 +491,13 @@ class MainWindow(QMainWindow):
         
         # Update map extent (but don't reload if map widget already exists and is loading)
         if self.map_widget:
+            # Check if base URL has changed (data source switch) BEFORE updating it
+            url_changed = self.map_widget.base_url != self.base_url
+            
+            # Update pixel sizes in map widget from service info (this happens after service loads)
+            self.map_widget.pixel_size_x = self.pixel_size_x
+            self.map_widget.pixel_size_y = self.pixel_size_y
+            
             self.map_widget.base_url = self.base_url
             
             # Update raster functions from current data source
@@ -538,8 +555,12 @@ class MainWindow(QMainWindow):
                 self.map_widget.service_extent = self.service_extent
                 self.log_message(f"Set default bounds to REST endpoint extent: {self.service_extent}")
             
-            if current_extent != self.service_extent or extent_matches_default:
-                self.log_message(f"Map extent ({current_extent}) differs from REST endpoint extent ({self.service_extent}), zooming to REST endpoint bounds...")
+            # Force reload if URL changed (data source switch) or if extent differs
+            if url_changed or current_extent != self.service_extent or extent_matches_default:
+                if url_changed:
+                    self.log_message(f"Data source URL changed, reloading map with new service...")
+                else:
+                    self.log_message(f"Map extent ({current_extent}) differs from REST endpoint extent ({self.service_extent}), zooming to REST endpoint bounds...")
                 if not getattr(self.map_widget, '_loading', False):
                     # CRITICAL: Use zoom_to_selection directly (like when user hits return)
                     # This recalculates the extent with padding and positions the box correctly
@@ -645,6 +666,9 @@ class MainWindow(QMainWindow):
                 self.map_widget.bathymetry_opacity = initial_opacity
                 # Store service extent in map widget so it can distinguish dataset bounds from user selection
                 self.map_widget.service_extent = self.service_extent
+                # Store pixel sizes for raster function selection
+                self.map_widget.pixel_size_x = self.pixel_size_x
+                self.map_widget.pixel_size_y = self.pixel_size_y
                 self.map_widget.selectionChanged.connect(self.on_selection_changed)
                 self.map_widget.selectionCompleted.connect(self.on_selection_completed)
                 self.map_widget.mapFirstLoaded.connect(self.on_map_first_loaded)
@@ -823,17 +847,19 @@ class MainWindow(QMainWindow):
         if not hasattr(self, 'cell_size_combo'):
             return
         
-        # Calculate the three options: base, 2x, 3x
+        # Calculate the five options: base, 2x, 3x, 4x, 5x
         option1 = base_cell_size  # Highest resolution (smallest cell size)
         option2 = base_cell_size * 2
         option3 = base_cell_size * 3
+        option4 = base_cell_size * 4
+        option5 = base_cell_size * 5
         
         # Store current selection if exists (only if not forcing highest resolution)
         current_text = self.cell_size_combo.currentText() if not force_highest_resolution else None
         
         # Clear and repopulate dropdown
         self.cell_size_combo.clear()
-        self.cell_size_combo.addItems([f"{option1:.1f}", f"{option2:.1f}", f"{option3:.1f}"])
+        self.cell_size_combo.addItems([f"{option1:.1f}", f"{option2:.1f}", f"{option3:.1f}", f"{option4:.1f}", f"{option5:.1f}"])
         
         if force_highest_resolution:
             # Always select the highest resolution (first option, smallest cell size)
@@ -844,7 +870,7 @@ class MainWindow(QMainWindow):
             try:
                 current_value = float(current_text)
                 # Find closest match
-                options = [option1, option2, option3]
+                options = [option1, option2, option3, option4, option5]
                 closest_idx = min(range(len(options)), key=lambda i: abs(options[i] - current_value))
                 self.cell_size_combo.setCurrentIndex(closest_idx)
             except (ValueError, TypeError):
@@ -985,12 +1011,15 @@ class MainWindow(QMainWindow):
         # Update download button state
         self.check_and_update_download_button()
         
-        # Calculate expected number of pixels based on selected cell size
+        # Calculate expected number of pixels based on selected cell size (for download)
         try:
             width_meters = xmax - xmin
             height_meters = ymax - ymin
             # Get cell size from dropdown (default to 4 if not available)
-            cell_size = float(self.cell_size_combo.currentText()) if hasattr(self, 'cell_size_combo') else 4.0
+            if hasattr(self, 'cell_size_combo') and self.cell_size_combo.currentText():
+                cell_size = float(self.cell_size_combo.currentText())
+            else:
+                cell_size = 4.0
             
             pixels_width = int(width_meters / cell_size)
             pixels_height = int(height_meters / cell_size)
@@ -1287,6 +1316,7 @@ class MainWindow(QMainWindow):
         
     def log_message(self, message):
         """Add message to log."""
+        # QTextEdit automatically handles both plain text and HTML
         self.log_text.append(message)
         # Auto-scroll to bottom
         scrollbar = self.log_text.verticalScrollBar()
@@ -1569,6 +1599,8 @@ class MainWindow(QMainWindow):
             self.map_widget.base_url = self.base_url
             # Update service extent in map widget so it can distinguish dataset bounds from user selection
             self.map_widget.service_extent = self.service_extent
+            # Don't update pixel sizes here - they will be updated in on_service_info_loaded after the new service loads
+            # This ensures we get the correct pixel sizes for the new data source
         
         # Reload service info (this will update extent and reload map)
         self.load_service_info()
