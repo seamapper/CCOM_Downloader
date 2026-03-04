@@ -22,6 +22,7 @@ A PyQt6-based desktop application for downloading bathymetry data from ArcGIS Im
 - **Map Legend**: Toggleable legend in upper left corner showing box color meanings (off by default)
 - **Refresh Map Button**: Refresh the map display for the currently shown area
 - **Export Image Button**: Export the current map display as a PNG image
+- **Fusion Dark Mode**: Qt Fusion style with a dark palette for a consistent look across Windows, macOS, and Linux; matplotlib figures (if used) remain in light style
 - **Tile Download Support**: Automatically tiles large downloads for reliable data retrieval
 - **Automatic Filename Generation**: Default filename includes cell size and timestamp
 - **Visual Feedback**:
@@ -84,7 +85,7 @@ python main.py
 ### Running the Executable
 
 A pre-built Windows executable is available in the [GitHub Releases](https://github.com/seamapper/CCOM_Downloader/releases):
-- `CCOM Bathymetry Downloader V2025.4.exe`
+- `CCOM_Bathy_Downloader_v2026.01.exe` (name follows `CCOM_Bathy_Downloader_v` + version from code)
 
 Download the latest release and double-click the executable to run the application.
 
@@ -148,13 +149,15 @@ To build a Windows executable:
 
 ```bash
 pip install pyinstaller
-pyinstaller "CCOM Bathymetry Downloader V2025.4.spec"
+pyinstaller CCOM_Bathy_Downloader.spec
 ```
 
-Or use the command line:
+The executable name is set automatically to `CCOM_Bathy_Downloader_v` + the uncommented `__version__` in `main.py` (e.g. `CCOM_Bathy_Downloader_v2026.01.exe`).
+
+Or use the command line (replace `2026.01` with current `__version__` from `main.py`):
 
 ```bash
-pyinstaller --onefile --noconsole --icon=media\CCOM.ico --name="CCOM Bathymetry Downloader V2025.4" main.py
+pyinstaller --onefile --noconsole --icon=media\CCOM.ico --name="CCOM_Bathy_Downloader_v2026.01" main.py
 ```
 
 The executable will be created in the `dist/` directory.
@@ -276,9 +279,9 @@ To build a macOS application (.app bundle) manually:
        <key>CFBundleName</key>
        <string>CCOM Bathymetry Downloader</string>
        <key>CFBundleVersion</key>
-       <string>2025.4</string>
+       <string>2026.01</string>
        <key>CFBundleShortVersionString</key>
-       <string>2025.4</string>
+       <string>2026.01</string>
        <key>CFBundleIconFile</key>
        <string>CCOM</string>
        <key>NSHighResolutionCapable</key>
@@ -309,10 +312,10 @@ To build a macOS application (.app bundle) manually:
        'plist': {
            'CFBundleName': 'CCOM Bathymetry Downloader',
            'CFBundleDisplayName': 'CCOM Bathymetry Downloader',
-           'CFBundleGetInfoString': 'CCOM Bathymetry Downloader v2025.4',
+           'CFBundleGetInfoString': 'CCOM Bathymetry Downloader v2026.01',
            'CFBundleIdentifier': 'edu.unh.ccom.bathymetry-downloader',
-           'CFBundleVersion': '2025.4',
-           'CFBundleShortVersionString': '2025.4',
+           'CFBundleVersion': '2026.01',
+           'CFBundleShortVersionString': '2026.01',
            'NSHighResolutionCapable': True,
        }
    }
@@ -351,7 +354,7 @@ To create a disk image (.dmg) for distribution:
      --icon "CCOM Bathymetry Downloader.app" 150 190 \
      --hide-extension "CCOM Bathymetry Downloader.app" \
      --app-drop-link 450 190 \
-     "CCOM_Bathymetry_Downloader_V2025.4.dmg" \
+     "CCOM_Bathymetry_Downloader_V2026.01.dmg" \
      "CCOM Bathymetry Downloader.app"
    ```
 
@@ -382,7 +385,7 @@ If you plan to distribute the app outside the Mac App Store:
      --primary-bundle-id "edu.unh.ccom.bathymetry-downloader" \
      --username "your-apple-id@example.com" \
      --password "@keychain:AC_PASSWORD" \
-     --file "CCOM_Bathymetry_Downloader_V2025.4.dmg"
+     --file "CCOM_Bathymetry_Downloader_V2026.01.dmg"
    ```
 
 The executable/app will be created in the `dist/` directory.
@@ -400,11 +403,14 @@ Email: pjohnson@ccom.unh.edu
 
 ## Version
 
-Current version: **2025.4**
+Current version: **2026.01**
 
 ### Version History
 
-**2025.4** (Current)
+**2026.01** (Current)
+- Added Fusion style with dark palette for consistent dark-mode UI across all platforms (matplotlib portions stay light)
+
+**2025.4**
 - Added Export Image button to save current map display as PNG
 - Added Legend checkbox to toggle legend visibility (off by default)
 - Removed opacity slider (bathymetry layer now always at full opacity)

@@ -29,7 +29,8 @@ See LICENSE file for full license text.
 # __version__ = "2025.1" # First Release of the program
 # __version__ = "2025.2" # Fixed area selection, added data source selection, added tile download option
 # __version__ = "2025.3" # Fixed dataset bounds display, added data source selection, added tile download option
-__version__ = "2025.4" # Added legend checkbox, added export image button
+# __version__ = "2025.4" # Added legend checkbox, added export image button
+__version__ = "2026.01" # Added Fusion style with dark palette for consistent dark-mode UI across all platforms (matplotlib portions stay light)
 
 import sys
 import os
@@ -47,8 +48,9 @@ if getattr(sys, 'frozen', False):
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QLineEdit, QPushButton, 
                              QFileDialog, QComboBox, QProgressBar, QTextEdit,
-                             QGroupBox, QMessageBox, QCheckBox)
+                             QGroupBox, QMessageBox, QCheckBox, QStyleFactory)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
+from PyQt6.QtGui import QPalette, QColor
 from map_widget import MapWidget
 from download_module import BathymetryDownloader
 import requests
@@ -1647,9 +1649,58 @@ class MainWindow(QMainWindow):
             self._pending_selection = None
 
 
+def create_dark_fusion_palette():
+    """Create a dark palette for use with Fusion style (consistent across platforms)."""
+    palette = QPalette()
+    # Window and widget backgrounds
+    palette.setColor(QPalette.ColorRole.Window, QColor(53, 53, 53))
+    palette.setColor(QPalette.ColorRole.WindowText, QColor(255, 255, 255))
+    palette.setColor(QPalette.ColorRole.Base, QColor(25, 25, 25))
+    palette.setColor(QPalette.ColorRole.AlternateBase, QColor(53, 53, 53))
+    # Buttons
+    palette.setColor(QPalette.ColorRole.Button, QColor(53, 53, 53))
+    palette.setColor(QPalette.ColorRole.ButtonText, QColor(255, 255, 255))
+    # Text
+    palette.setColor(QPalette.ColorRole.Text, QColor(255, 255, 255))
+    palette.setColor(QPalette.ColorRole.PlaceholderText, QColor(160, 160, 160))
+    palette.setColor(QPalette.ColorRole.BrightText, QColor(255, 0, 0))
+    # Tooltips
+    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(53, 53, 53))
+    palette.setColor(QPalette.ColorRole.ToolTipText, QColor(255, 255, 255))
+    # Selection / highlight
+    palette.setColor(QPalette.ColorRole.Highlight, QColor(42, 130, 218))
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
+    # Links
+    palette.setColor(QPalette.ColorRole.Link, QColor(42, 130, 218))
+    # Disabled
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText, QColor(127, 127, 127))
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, QColor(127, 127, 127))
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, QColor(127, 127, 127))
+    return palette
+
+
 def main():
     """Main entry point."""
     app = QApplication(sys.argv)
+    
+    # Use Fusion style for consistent look across Windows, macOS, and Linux
+    if "Fusion" in QStyleFactory.keys():
+        app.setStyle("Fusion")
+    # Apply dark palette to the Qt GUI (Fusion respects the palette)
+    app.setPalette(create_dark_fusion_palette())
+    
+    # Ensure any matplotlib figures use light style (not the app's dark palette)
+    try:
+        import matplotlib
+        matplotlib.rcParams["figure.facecolor"] = "white"
+        matplotlib.rcParams["axes.facecolor"] = "white"
+        matplotlib.rcParams["axes.edgecolor"] = "black"
+        matplotlib.rcParams["text.color"] = "black"
+        matplotlib.rcParams["xtick.color"] = "black"
+        matplotlib.rcParams["ytick.color"] = "black"
+    except ImportError:
+        pass
+    
     window = MainWindow()
     window.show()
     sys.exit(app.exec())
