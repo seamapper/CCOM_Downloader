@@ -145,7 +145,13 @@ Downloads are saved as GeoTIFF files with:
 
 ### Windows
 
-To build a Windows executable:
+To build a Windows executable, use the project venv Python at `C:\Users\pjohnson\PycharmProjects\.venv\Scripts`:
+
+```bash
+C:\Users\pjohnson\PycharmProjects\.venv\Scripts\python.exe -m PyInstaller CCOM_Bathy_Downloader.spec
+```
+
+Or activate the venv first, then run:
 
 ```bash
 pip install pyinstaller
